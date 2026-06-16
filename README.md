@@ -1,6 +1,6 @@
 # Zensu
 
-Zensu is a high-performance desktop downloader for AnimePahe, featuring a premium glassmorphic dark user interface (powered by Wails + Vite/Vanilla JS) alongside a modular command-line interface (CLI) for advanced usage and terminal environments (including Android Termux).
+Zensu is a high-performance downloader for AnimePahe, featuring an integrated graphical user interface alongside a modular command-line interface (CLI) for advanced usage and terminal environments (including Android Termux).
 
 ## Features
 
