@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"zensu/internal/api"
@@ -44,6 +46,16 @@ func main() {
 	}
 	extractor := kwik.NewExtractor(cfg.UA, cfg.Cookies)
 	manager := dl.NewManager(cfg.MaxParallel, cfg.UA)
+
+	// Handle signals for graceful shutdown on Ctrl+C / terminal close
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Println("\n  [INFO] Received interrupt signal. Cleaning up active downloads...")
+		manager.CancelAll()
+		os.Exit(0)
+	}()
 
 	fmt.Println()
 	fmt.Println("  \033[1;36manimepahe-dl\033[0m")
