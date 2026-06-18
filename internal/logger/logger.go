@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -24,18 +23,30 @@ func Init() error {
 	if err := os.MkdirAll(zensuDir, 0755); err != nil {
 		return err
 	}
-	logPath := filepath.Join(zensuDir, "henzuku.log")
-
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return err
+	baseLogPath := filepath.Join(zensuDir, "henzuku.log")
+	var file *os.File
+	var openErr error
+	finalLogPath := baseLogPath
+	for i := 0; i < 10; i++ {
+		path := baseLogPath
+		if i > 0 {
+			path = filepath.Join(zensuDir, fmt.Sprintf("henzuku_%d.log", i))
+		}
+		file, openErr = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if openErr == nil {
+			finalLogPath = path
+			break
+		}
+	}
+	if openErr != nil {
+		return openErr
 	}
 	logFile = file
 
 	mw := io.MultiWriter(os.Stdout, logFile)
 	logger = log.New(mw, "", 0)
 	
-	Infof("STARTUP", "Logger initialized at %s", sanitizePath(logPath))
+	Infof("STARTUP", "Logger initialized at %s", sanitizePath(finalLogPath))
 	return nil
 }
 
@@ -47,12 +58,6 @@ func Close() {
 }
 
 func sanitizePath(p string) string {
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		p = strings.ReplaceAll(p, home, "<Home>")
-	}
-	if wd, err := os.Getwd(); err == nil && wd != "" {
-		p = strings.ReplaceAll(p, wd, "<AppDir>")
-	}
 	return p
 }
 

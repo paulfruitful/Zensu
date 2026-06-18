@@ -55,24 +55,26 @@ type activeJob struct {
 }
 
 type Manager struct {
-	maxParallel int
-	ua          string
-	mu          sync.Mutex
-	progress    map[string]*JobProgress
-	jobsChan    chan Job
+	maxParallel  int
+	ua           string
+	mu           sync.Mutex
+	progress     map[string]*JobProgress
+	jobsChan     chan Job
 
-	activeJobs  map[string]activeJob
-	runCounter  int64
-	cancelMu    sync.Mutex
+	activeJobs   map[string]activeJob
+	runCounter   int64
+	cancelMu     sync.Mutex
+	cancelledIDs map[string]bool // tracks IDs that were explicitly cancelled to block re-submission
 }
 
 func NewManager(maxParallel int, ua string) *Manager {
 	m := &Manager{
-		maxParallel: maxParallel,
-		ua:          ua,
-		progress:    make(map[string]*JobProgress),
-		jobsChan:    make(chan Job, 1000),
-		activeJobs:  make(map[string]activeJob),
+		maxParallel:  maxParallel,
+		ua:           ua,
+		progress:     make(map[string]*JobProgress),
+		jobsChan:     make(chan Job, 1000),
+		activeJobs:   make(map[string]activeJob),
+		cancelledIDs: make(map[string]bool),
 	}
 	m.StartWorkers()
 	return m
@@ -119,22 +121,24 @@ func (m *Manager) Submit(job Job) {
 		job.ID = fmt.Sprintf("%s - %s", anime, epStr)
 	}
 
-	// Cancel any existing active worker for this job ID to prevent progress glitches
+	// Block re-submission of explicitly cancelled jobs
 	m.cancelMu.Lock()
-	if act, ok := m.activeJobs[job.ID]; ok {
-		act.cancel()
-		delete(m.activeJobs, job.ID)
-		logger.Infof("QUEUE_CANCEL_PREV", "Cancelled previous running job: %s", job.ID)
-		time.Sleep(50 * time.Millisecond) // Give the worker a moment to drop out
+	if m.cancelledIDs[job.ID] {
+		m.cancelMu.Unlock()
+		logger.Infof("QUEUE_BLOCKED", "Blocked re-submission of cancelled job: %s", job.ID)
+		return
 	}
 	m.cancelMu.Unlock()
 
+	// Cancel and terminate any existing active worker/process for this job ID to prevent duplicate downloads
+	m.CancelJob(job.ID)
+	m.cancelMu.Lock()
+	delete(m.cancelledIDs, job.ID)
+	m.cancelMu.Unlock()
+
 	m.mu.Lock()
-	p, ok := m.progress[job.ID]
-	if !ok {
-		p = &JobProgress{ID: job.ID, Anime: job.AnimeTitle, EpNum: job.EpNum}
-		m.progress[job.ID] = p
-	}
+	p := &JobProgress{ID: job.ID, Anime: job.AnimeTitle, EpNum: job.EpNum}
+	m.progress[job.ID] = p
 	p.Status = "queued"
 	p.Progress = 0
 	p.Speed = ""
@@ -171,7 +175,11 @@ func (m *Manager) downloadWorker(job Job) {
 		cancel()
 	}()
 
-	logger.Infof("DL_START", "Starting download: %s (HLS: %t)", job.ID, job.IsHLS)
+	dlType := "MP4"
+	if job.IsHLS {
+		dlType = "HLS"
+	}
+	logger.Infof("DL_START", "Starting %s download: %s", dlType, job.ID)
 	m.UpdateProgress(job.ID, job.AnimeTitle, job.EpNum, "downloading", 0, "", "", "")
 
 	var err error
@@ -183,13 +191,13 @@ func (m *Manager) downloadWorker(job Job) {
 
 	if err != nil {
 		if ctx.Err() != nil {
-			logger.Infof("DL_CANCELLED", "Worker context cancelled: %s", job.ID)
+			logger.Infof("DL_CANCELLED", "%s download cancelled: %s", dlType, job.ID)
 			return // Ignore setting status to failed to let new worker update status
 		}
-		logger.Errorf("DL_FAIL", "Failed downloading %s: %v", job.ID, err)
+		logger.Errorf("DL_FAIL", "%s download failed for %s: %v", dlType, job.ID, err)
 		m.UpdateProgress(job.ID, job.AnimeTitle, job.EpNum, "failed", 0, "", "", err.Error())
 	} else {
-		logger.Infof("DL_DONE", "Finished downloading: %s", job.ID)
+		logger.Infof("DL_DONE", "%s download finished: %s", dlType, job.ID)
 		m.UpdateProgress(job.ID, job.AnimeTitle, job.EpNum, "done", 100, "", "", "")
 		go func(id string) {
 			time.Sleep(3 * time.Second)
@@ -201,6 +209,14 @@ func (m *Manager) downloadWorker(job Job) {
 }
 
 func (m *Manager) UpdateProgress(id, anime string, epNum float64, status string, progress float64, speed, eta, errMsg string) {
+	m.cancelMu.Lock()
+	isCancelled := m.cancelledIDs[id]
+	m.cancelMu.Unlock()
+
+	if isCancelled {
+		return
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, ok := m.progress[id]
@@ -231,15 +247,38 @@ func (m *Manager) ClearProgress() {
 	m.progress = make(map[string]*JobProgress)
 }
 
+func killProcessTree(pid int) error {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", pid))
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		setHideWindow(cmd.SysProcAttr)
+		return cmd.Run()
+	}
+	return fmt.Errorf("not windows")
+}
+
 func (m *Manager) CancelJob(id string) {
 	m.cancelMu.Lock()
+	m.cancelledIDs[id] = true // mark as cancelled to block any future re-submission
 	if act, ok := m.activeJobs[id]; ok {
 		act.cancel()
-		if act.cmd != nil && act.cmd.Process != nil {
-			logger.Infof("DL_KILL_PROCESS", "Directly killing process for %s (PID: %d)", id, act.cmd.Process.Pid)
-			act.cmd.Process.Kill()
+		if act.cmd != nil {
+			if act.cmd.Process != nil {
+				logger.Infof("DL_KILL_PROCESS", "Directly killing process tree for %s (PID: %d)", id, act.cmd.Process.Pid)
+				if err := killProcessTree(act.cmd.Process.Pid); err != nil {
+					if killErr := act.cmd.Process.Kill(); killErr != nil {
+						logger.Errorf("DL_KILL_PROCESS_ERR", "Failed to kill process %d for %s: %v", act.cmd.Process.Pid, id, killErr)
+					}
+				}
+			} else {
+				logger.Warnf("DL_KILL_PROCESS_NIL_PROC", "Cannot kill process for %s: cmd.Process is nil", id)
+			}
+		} else {
+			logger.Warnf("DL_KILL_PROCESS_NIL_CMD", "Cannot kill process for %s: cmd is nil", id)
 		}
 		delete(m.activeJobs, id)
+	} else {
+		logger.Infof("DL_CANCEL_NOT_ACTIVE", "Job %s not in activeJobs (may be in resolver phase)", id)
 	}
 	m.cancelMu.Unlock()
 
@@ -248,13 +287,33 @@ func (m *Manager) CancelJob(id string) {
 	m.mu.Unlock()
 }
 
+// ClearCancelled removes IDs from the cancelled set so they can be re-downloaded.
+// Called when the user explicitly initiates a fresh StartDownload.
+func (m *Manager) ClearCancelled(ids ...string) {
+	m.cancelMu.Lock()
+	for _, id := range ids {
+		delete(m.cancelledIDs, id)
+	}
+	m.cancelMu.Unlock()
+}
+
 func (m *Manager) CancelAll() {
 	m.cancelMu.Lock()
 	for id, act := range m.activeJobs {
 		act.cancel()
-		if act.cmd != nil && act.cmd.Process != nil {
-			logger.Infof("DL_KILL_PROCESS_ALL", "Directly killing process for %s (PID: %d) during shutdown", id, act.cmd.Process.Pid)
-			act.cmd.Process.Kill()
+		if act.cmd != nil {
+			if act.cmd.Process != nil {
+				logger.Infof("DL_KILL_PROCESS_ALL", "Directly killing process tree for %s (PID: %d) during shutdown", id, act.cmd.Process.Pid)
+				if err := killProcessTree(act.cmd.Process.Pid); err != nil {
+					if killErr := act.cmd.Process.Kill(); killErr != nil {
+						logger.Errorf("DL_KILL_PROCESS_ALL_ERR", "Failed to kill process %d for %s during shutdown: %v", act.cmd.Process.Pid, id, killErr)
+					}
+				}
+			} else {
+				logger.Warnf("DL_KILL_PROCESS_ALL_NIL_PROC", "Cannot kill process for %s during shutdown: cmd.Process is nil", id)
+			}
+		} else {
+			logger.Warnf("DL_KILL_PROCESS_ALL_NIL_CMD", "Cannot kill process for %s during shutdown: cmd is nil", id)
 		}
 	}
 	m.activeJobs = make(map[string]activeJob)
@@ -567,6 +626,11 @@ func (m *Manager) downloadHLS(ctx context.Context, job Job) error {
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+
+	if ctx.Err() != nil {
+		logger.Warnf("DL_HLS_CANCELLED_PRESTART", "HLS download cancelled before starting ffmpeg: %s", job.ID)
+		return ctx.Err()
+	}
 
 	if err := cmd.Start(); err != nil {
 		logger.Errorf("DL_HLS_START_ERR", "Failed starting ffmpeg: %v", err)

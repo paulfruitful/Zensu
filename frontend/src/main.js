@@ -32,6 +32,7 @@ applyTheme(initialTheme);
 let currentAnimeTitle = '';
 let currentAnimeSlug = '';
 let episodeList = [];
+const cancelledGroups = new Set();
 
 // DOM References
 const tabs = {
@@ -223,6 +224,7 @@ searchInput.addEventListener('keydown', (e) => {
 async function openEpisodeModal(title, slug, posterURL) {
     currentAnimeTitle = title;
     currentAnimeSlug = slug;
+    modalDownloadBtn.disabled = true;
     
     modalAnimeTitle.textContent = title;
     modalStatusText.textContent = 'Loading episodes list...';
@@ -253,7 +255,11 @@ async function openEpisodeModal(title, slug, posterURL) {
     episodeModal.classList.add('active');
 
     try {
-        const eps = await GetEpisodes(title, slug);
+        const [eps, progressList] = await Promise.all([
+            GetEpisodes(title, slug),
+            GetProgress()
+        ]);
+        
         episodeList = eps;
         modalEpisodesList.innerHTML = '';
 
@@ -263,9 +269,19 @@ async function openEpisodeModal(title, slug, posterURL) {
             return;
         }
 
-        const allDownloaded = eps.every(ep => ep.exists);
+        // Keep track of which episodes are currently active in downloads list (queued, downloading, or done)
+        const activeOrCompletedEps = new Set();
+        progressList.forEach(p => {
+            if (p.anime === title) {
+                if (p.status === 'queued' || p.status === 'downloading' || p.status === 'done') {
+                    activeOrCompletedEps.add(p.epNum);
+                }
+            }
+        });
+
+        const allDownloaded = eps.every(ep => ep.exists || activeOrCompletedEps.has(ep.episode));
         if (allDownloaded) {
-            modalStatusText.textContent = 'All episodes are already downloaded! ✓';
+            modalStatusText.textContent = 'All episodes are already active or downloaded! ✓';
             modalStatusText.style.color = '#10b981';
         } else {
             modalStatusText.textContent = 'Select episodes to queue for download';
@@ -275,19 +291,28 @@ async function openEpisodeModal(title, slug, posterURL) {
         eps.forEach(ep => {
             const card = document.createElement('div');
             card.className = 'ep-checkbox-card';
+            const isAlreadyActive = activeOrCompletedEps.has(ep.episode);
+            const isDisabled = ep.exists || isAlreadyActive;
+            
             if (ep.exists) {
                 card.classList.add('downloaded');
+            } else if (isAlreadyActive) {
+                card.classList.add('downloading-active');
             }
 
             card.innerHTML = `
-                <input type="checkbox" id="ep-${ep.episode}" value="${ep.episode}" ${ep.exists ? 'disabled' : ''}>
+                <input type="checkbox" id="ep-${ep.episode}" value="${ep.episode}" ${isDisabled ? 'disabled' : ''}>
                 <label for="ep-${ep.episode}" class="ep-card-label">
                     <span>E${ep.episode}</span>
-                    ${ep.exists ? '<span class="status-badge">✓ Saved</span>' : ''}
+                    ${ep.exists ? '<span class="status-badge">✓ Saved</span>' : (isAlreadyActive ? '<span class="status-badge">✓ Active</span>' : '')}
                 </label>
             `;
             modalEpisodesList.appendChild(card);
         });
+
+        // Initialize state of the queue button based on initial selection (which is 0 initially)
+        updateModalDownloadBtnState();
+
     } catch (err) {
         modalEpisodesList.innerHTML = `<div style="grid-column: span 4; text-align: center; color: #ef4444;">Failed to fetch episodes: ${err}</div>`;
         modalStatusText.textContent = 'Failed to fetch episodes.';
@@ -299,17 +324,30 @@ function closeEpisodeModal() {
     episodeModal.classList.remove('active');
 }
 
+function updateModalDownloadBtnState() {
+    const checkedCount = modalEpisodesList.querySelectorAll('input[type="checkbox"]:checked').length;
+    modalDownloadBtn.disabled = (checkedCount === 0);
+}
+
 modalCloseBtn.addEventListener('click', closeEpisodeModal);
 modalCancelBtn.addEventListener('click', closeEpisodeModal);
 
 modalSelectAll.addEventListener('click', () => {
     const checkboxes = modalEpisodesList.querySelectorAll('input[type="checkbox"]:not(:disabled)');
     checkboxes.forEach(cb => cb.checked = true);
+    updateModalDownloadBtnState();
 });
 
 modalSelectNone.addEventListener('click', () => {
     const checkboxes = modalEpisodesList.querySelectorAll('input[type="checkbox"]');
     checkboxes.forEach(cb => cb.checked = false);
+    updateModalDownloadBtnState();
+});
+
+modalEpisodesList.addEventListener('change', (e) => {
+    if (e.target && e.target.type === 'checkbox') {
+        updateModalDownloadBtnState();
+    }
 });
 
 modalDownloadBtn.addEventListener('click', async () => {
@@ -397,6 +435,13 @@ async function updateDownloadsProgress() {
             groups[animeName].items.push(item);
         });
 
+        // Clean up cancelledGroups set
+        for (const name of cancelledGroups) {
+            if (!groups[name]) {
+                cancelledGroups.delete(name);
+            }
+        }
+
         // Build a set of current active group IDs
         const groupNames = Object.keys(groups).sort();
         const currentGroupDomIds = new Set(groupNames.map(name => `dl-group-${name.replace(/[^a-zA-Z0-9-_]/g, '_')}`));
@@ -464,7 +509,7 @@ async function updateDownloadsProgress() {
             } else if (queuedCount > 0) {
                 combinedETASecs = Math.ceil(totalRemainingSecs / 3);
             }
-            const etaText = (downloadingCount > 0 || queuedCount > 0) ? `ETA: ${formatSeconds(combinedETASecs)}` : '';
+            const showCancel = (downloadingCount > 0 || queuedCount > 0) && !cancelledGroups.has(groupName);
 
             // Check if group is expanded
             const isExpanded = expandedGroups.has(groupName);
@@ -480,7 +525,7 @@ async function updateDownloadsProgress() {
                             <span class="group-status ${statusClass}">${statusText}</span>
                         </div>
                         <div class="group-meta">
-                            <button class="btn-cancel" title="Cancel/Remove Downloads">
+                            <button class="btn-cancel" title="Cancel/Remove Downloads" style="display: ${showCancel ? 'flex' : 'none'};">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;display:block;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                             </button>
                             <button class="btn-retry" title="Retry Failed/Stuck Downloads">
@@ -532,11 +577,15 @@ async function updateDownloadsProgress() {
                 if (cancelBtn) {
                     cancelBtn.addEventListener('click', async (e) => {
                         e.stopPropagation(); // prevent toggling the group expansion
+                        cancelBtn.style.display = 'none';
+                        cancelledGroups.add(groupName);
                         try {
                             await CancelAnimeDownloads(groupName);
                             updateDownloadsProgress();
                         } catch (err) {
                             console.error('Failed to cancel:', err);
+                            cancelledGroups.delete(groupName);
+                            cancelBtn.style.display = 'flex';
                         }
                     });
                 }
@@ -566,6 +615,11 @@ async function updateDownloadsProgress() {
                 const episodesDiv = groupEl.querySelector('.group-episodes');
                 if (episodesDiv) {
                     episodesDiv.style.display = isExpanded ? 'flex' : 'none';
+                }
+
+                const cancelBtn = groupEl.querySelector('.btn-cancel');
+                if (cancelBtn) {
+                    cancelBtn.style.display = showCancel ? 'flex' : 'none';
                 }
             }
 

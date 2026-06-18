@@ -217,6 +217,8 @@ func (a *App) StartDownload(animeTitle, slug string, epNums []float64) error {
 		a.dlManager.SetMaxParallel(cfg.MaxParallel)
 	}
 
+	logger.Infof("DOWNLOAD_BATCH_START", "Starting download batch of %d episodes for anime %q (slug: %q)", len(epNums), animeTitle, slug)
+
 	eps, err := client.GetEpisodes(slug)
 	if err != nil {
 		logger.Errorf("APP_EPISODES_ERR", "Failed to fetch episodes for %s (%s): %v", animeTitle, slug, err)
@@ -228,14 +230,19 @@ func (a *App) StartDownload(animeTitle, slug string, epNums []float64) error {
 		epMap[e.Episode] = e
 	}
 
-	// Pre-populate queue with status "queued" using ID (Anime Title + EpNum)
+	// Clear cancelled state and pre-populate queue with status "queued" using ID (Anime Title + EpNum)
+	var jobIDs []string
 	for _, epNum := range epNums {
 		epStr := fmt.Sprintf("E%02.0f", epNum)
 		if math.Mod(epNum, 1) != 0 {
 			epStr = fmt.Sprintf("E%.1f", epNum)
 		}
 		jobID := fmt.Sprintf("%s - %s", animeTitle, epStr)
-		a.dlManager.UpdateProgress(jobID, animeTitle, epNum, "queued", 0, "", "", "")
+		jobIDs = append(jobIDs, jobID)
+	}
+	a.dlManager.ClearCancelled(jobIDs...)
+	for i, epNum := range epNums {
+		a.dlManager.UpdateProgress(jobIDs[i], animeTitle, epNum, "queued", 0, "", "", "")
 	}
 
 	go func() {
@@ -260,6 +267,14 @@ func (a *App) StartDownload(animeTitle, slug string, epNums []float64) error {
 					return
 				}
 
+				epStr := fmt.Sprintf("E%02.0f", epNum)
+				if math.Mod(epNum, 1) != 0 {
+					epStr = fmt.Sprintf("E%.1f", epNum)
+				}
+				jobID := fmt.Sprintf("%s - %s", animeTitle, epStr)
+
+				logger.Infof("RESOLVE_START", "Resolving stream links for %s (session: %s)...", jobID, ep.Session)
+
 				var candidates []api.KwikCandidate
 				var err error
 				for attempt := 1; attempt <= 6; attempt++ {
@@ -271,12 +286,6 @@ func (a *App) StartDownload(animeTitle, slug string, epNums []float64) error {
 						time.Sleep(time.Duration(attempt) * 2000 * time.Millisecond)
 					}
 				}
-
-				epStr := fmt.Sprintf("E%02.0f", epNum)
-				if math.Mod(epNum, 1) != 0 {
-					epStr = fmt.Sprintf("E%.1f", epNum)
-				}
-				jobID := fmt.Sprintf("%s - %s", animeTitle, epStr)
 
 				if err != nil || len(candidates) == 0 {
 					logger.Errorf("APP_KWIK_RESOLVE_ERR", "Failed to resolve kwik redirect links for %s: %v", jobID, err)
@@ -308,6 +317,8 @@ func (a *App) StartDownload(animeTitle, slug string, epNums []float64) error {
 					a.dlManager.UpdateProgress(jobID, animeTitle, epNum, "failed", 0, "", "", "failed kwik link extraction")
 					return
 				}
+
+				logger.Infof("RESOLVE_OK", "Successfully resolved download URL for %s (HLS: %t)", jobID, isHLS)
 
 				// Check if the job was cancelled/removed while resolving
 				progressList := a.dlManager.GetProgress()
@@ -393,7 +404,7 @@ func (a *App) RetryFailed(animeTitle string) error {
 	progress := a.dlManager.GetProgress()
 	var epNums []float64
 	for _, p := range progress {
-		if p.Anime == animeTitle && (p.Status == "failed" || p.Status == "downloading" || p.Status == "queued") {
+		if p.Anime == animeTitle && p.Status == "failed" {
 			epNums = append(epNums, p.EpNum)
 		}
 	}

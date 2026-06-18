@@ -342,6 +342,12 @@ input[type="text"]:focus, select:focus, textarea:focus {
     border-radius: 6px;
 }
 
+button:disabled {
+    opacity: 0.4;
+    pointer-events: none;
+    cursor: not-allowed;
+}
+
 /* Search view specifically */
 .search-bar {
     display: flex;
@@ -884,6 +890,22 @@ input[type="text"]:focus, select:focus, textarea:focus {
 
 .ep-checkbox-card.downloaded .status-badge {
     color: #10b981;
+}
+
+.ep-checkbox-card.downloading-active {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.ep-checkbox-card.downloading-active .ep-card-label {
+    border-color: rgba(0, 242, 254, 0.25);
+    background: rgba(0, 242, 254, 0.03);
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.ep-checkbox-card.downloading-active .status-badge {
+    color: var(--accent-cyan);
 }
 
 .ep-checkbox-card.downloaded input[type="checkbox"]:checked + .ep-card-label {
