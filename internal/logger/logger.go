@@ -57,6 +57,16 @@ func Close() {
 	}
 }
 
+type WailsLogger struct{}
+
+func (l *WailsLogger) Print(message string)   { logMessage("PRINT", "WAILS", message) }
+func (l *WailsLogger) Trace(message string)   { logMessage("TRACE", "WAILS", message) }
+func (l *WailsLogger) Debug(message string)   { logMessage("DEBUG", "WAILS", message) }
+func (l *WailsLogger) Info(message string)    { logMessage("INFO", "WAILS", message) }
+func (l *WailsLogger) Warning(message string) { logMessage("WARN", "WAILS", message) }
+func (l *WailsLogger) Error(message string)   { logMessage("ERROR", "WAILS", message) }
+func (l *WailsLogger) Fatal(message string)   { logMessage("FATAL", "WAILS", message) }
+
 func sanitizePath(p string) string {
 	return p
 }

@@ -2,6 +2,9 @@ package dl
 
 import (
 	"archive/zip"
+	"crypto/md5"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,6 +43,60 @@ func EnsureFFmpegOnce() error {
 	return ffmpegErr
 }
 
+func fetchRemoteChecksum(urlStr string) (string, error) {
+	resp, err := http.Get(urlStr)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	fields := strings.Fields(string(bodyBytes))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty checksum file")
+	}
+
+	return strings.ToLower(fields[0]), nil
+}
+
+func verifyFileHash(filePath, expectedHash string, useSHA256 bool) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var computed []byte
+	if useSHA256 {
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return err
+		}
+		computed = h.Sum(nil)
+	} else {
+		h := md5.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return err
+		}
+		computed = h.Sum(nil)
+	}
+
+	computedHex := hex.EncodeToString(computed)
+	if computedHex != expectedHash {
+		return fmt.Errorf("hash mismatch: expected %s, got %s", expectedHash, computedHex)
+	}
+
+	return nil
+}
+
 func EnsureFFmpeg() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -61,21 +118,29 @@ func EnsureFFmpeg() error {
 		return nil
 	}
 
-	if p, err := exec.LookPath("ffmpeg"); err == nil {
-		if isFfmpegCallable(p) {
-			return nil
-		}
-	}
-
 	fmt.Println("  [INFO] FFmpeg not found. Downloading static build...")
 
 	if runtime.GOOS == "windows" {
 		tempZip := filepath.Join(binDir, "ffmpeg-temp.zip")
+		checksumURL := ffmpegWinURL + ".sha256"
+		fmt.Println("  [INFO] Fetching FFmpeg SHA256 checksum...")
+		expectedHash, err := fetchRemoteChecksum(checksumURL)
+		if err != nil {
+			return fmt.Errorf("failed to fetch FFmpeg checksum: %w", err)
+		}
+
 		if err := downloadFFmpeg(ffmpegWinURL, tempZip); err != nil {
 			os.Remove(tempZip)
 			return fmt.Errorf("failed to download FFmpeg: %w", err)
 		}
-		fmt.Println("\n  [INFO] Extracting FFmpeg...")
+
+		fmt.Println("\n  [INFO] Verifying download integrity...")
+		if err := verifyFileHash(tempZip, expectedHash, true); err != nil {
+			os.Remove(tempZip)
+			return fmt.Errorf("FFmpeg verification failed: %w", err)
+		}
+
+		fmt.Println("  [INFO] Extracting FFmpeg...")
 		if err := extractFFmpegWin(tempZip, localPath); err != nil {
 			os.Remove(tempZip)
 			return fmt.Errorf("failed to extract FFmpeg: %w", err)
@@ -89,12 +154,26 @@ func EnsureFFmpeg() error {
 			url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-armel-static.tar.xz"
 		}
 
+		checksumURL := url + ".md5"
+		fmt.Println("  [INFO] Fetching FFmpeg MD5 checksum...")
+		expectedHash, err := fetchRemoteChecksum(checksumURL)
+		if err != nil {
+			return fmt.Errorf("failed to fetch FFmpeg checksum: %w", err)
+		}
+
 		tempTar := filepath.Join(binDir, "ffmpeg-temp.tar.xz")
 		if err := downloadFFmpeg(url, tempTar); err != nil {
 			os.Remove(tempTar)
 			return fmt.Errorf("failed to download FFmpeg: %w", err)
 		}
-		fmt.Println("\n  [INFO] Extracting FFmpeg...")
+
+		fmt.Println("\n  [INFO] Verifying download integrity...")
+		if err := verifyFileHash(tempTar, expectedHash, false); err != nil {
+			os.Remove(tempTar)
+			return fmt.Errorf("FFmpeg verification failed: %w", err)
+		}
+
+		fmt.Println("  [INFO] Extracting FFmpeg...")
 		if err := extractFFmpegLinux(tempTar, binDir, localPath); err != nil {
 			os.Remove(tempTar)
 			return fmt.Errorf("failed to extract FFmpeg: %w", err)

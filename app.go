@@ -58,6 +58,7 @@ type AnimeResult struct {
 }
 
 func (a *App) SearchAnime(query string) ([]AnimeResult, error) {
+	logger.Infof("APP_SEARCH", "Searching for anime with query %q", query)
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Errorf("APP_CONFIG_ERR", "Failed to load config: %v", err)
@@ -76,6 +77,7 @@ func (a *App) SearchAnime(query string) ([]AnimeResult, error) {
 		logger.Errorf("APP_SEARCH_ERR", "Search failed for query %q: %v", query, err)
 		return nil, fmt.Errorf("search failed; verify your internet connection and Cloudflare clearance")
 	}
+	logger.Infof("APP_SEARCH_OK", "Found %d result(s) for query %q", len(res), query)
 	out := make([]AnimeResult, len(res))
 	for i, r := range res {
 		out[i] = AnimeResult{Session: r.Session, Title: r.Title, Poster: r.Poster}
@@ -98,6 +100,7 @@ func sanitizeName(name string) string {
 }
 
 func (a *App) GetEpisodes(animeTitle, slug string) ([]EpisodeInfo, error) {
+	logger.Infof("APP_EPISODES", "Fetching episodes for %q (slug: %s)", animeTitle, slug)
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Errorf("APP_CONFIG_ERR", "Failed to load config: %v", err)
@@ -116,6 +119,7 @@ func (a *App) GetEpisodes(animeTitle, slug string) ([]EpisodeInfo, error) {
 		logger.Errorf("APP_EPISODES_ERR", "Failed to fetch episodes for %s (%s): %v", animeTitle, slug, err)
 		return nil, fmt.Errorf("failed to fetch episodes; verify connection or Cloudflare clearance")
 	}
+	logger.Infof("APP_EPISODES_OK", "Fetched %d episode(s) for %q", len(eps), animeTitle)
 
 	sanitizedTitle := sanitizeName(animeTitle)
 	existingEps := make(map[float64]bool)
@@ -161,6 +165,7 @@ func (a *App) GetConfig() (*config.Config, error) {
 }
 
 func (a *App) SaveConfig(ua, cf, downloadDir, quality, audio, domain string, maxParallel int) error {
+	logger.Infof("APP_CONFIG_SAVE", "Saving configuration: domain=%s quality=%s audio=%s maxParallel=%d downloadDir=%s", domain, quality, audio, maxParallel, downloadDir)
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -219,17 +224,6 @@ func (a *App) StartDownload(animeTitle, slug string, epNums []float64) error {
 
 	logger.Infof("DOWNLOAD_BATCH_START", "Starting download batch of %d episodes for anime %q (slug: %q)", len(epNums), animeTitle, slug)
 
-	eps, err := client.GetEpisodes(slug)
-	if err != nil {
-		logger.Errorf("APP_EPISODES_ERR", "Failed to fetch episodes for %s (%s): %v", animeTitle, slug, err)
-		return fmt.Errorf("failed to retrieve episodes; check connection or settings")
-	}
-
-	epMap := make(map[float64]api.Episode)
-	for _, e := range eps {
-		epMap[e.Episode] = e
-	}
-
 	// Clear cancelled state and pre-populate queue with status "queued" using ID (Anime Title + EpNum)
 	var jobIDs []string
 	for _, epNum := range epNums {
@@ -246,11 +240,25 @@ func (a *App) StartDownload(animeTitle, slug string, epNums []float64) error {
 	}
 
 	go func() {
-		var resolveWg sync.WaitGroup
+		eps, err := client.GetEpisodes(slug)
+		if err != nil {
+			logger.Errorf("APP_EPISODES_ERR", "Failed to fetch episodes for %s (%s): %v", animeTitle, slug, err)
+			for i, epNum := range epNums {
+				a.dlManager.UpdateProgress(jobIDs[i], animeTitle, epNum, "failed", 0, "", "", "failed to retrieve release list")
+			}
+			return
+		}
 
+		epMap := make(map[float64]api.Episode)
+		for _, e := range eps {
+			epMap[e.Episode] = e
+		}
+
+		var resolveWg sync.WaitGroup
 		resolveWg.Add(len(epNums))
-		for _, epNum := range epNums {
+		for i, epNum := range epNums {
 			epNum := epNum
+			jobID := jobIDs[i]
 			a.resolveSem <- struct{}{}
 			go func() {
 				defer resolveWg.Done()
@@ -258,11 +266,6 @@ func (a *App) StartDownload(animeTitle, slug string, epNums []float64) error {
 
 				ep, ok := epMap[epNum]
 				if !ok {
-					epStr := fmt.Sprintf("E%02.0f", epNum)
-					if math.Mod(epNum, 1) != 0 {
-						epStr = fmt.Sprintf("E%.1f", epNum)
-					}
-					jobID := fmt.Sprintf("%s - %s", animeTitle, epStr)
 					a.dlManager.UpdateProgress(jobID, animeTitle, epNum, "failed", 0, "", "", "episode not found in release list")
 					return
 				}
@@ -271,7 +274,6 @@ func (a *App) StartDownload(animeTitle, slug string, epNums []float64) error {
 				if math.Mod(epNum, 1) != 0 {
 					epStr = fmt.Sprintf("E%.1f", epNum)
 				}
-				jobID := fmt.Sprintf("%s - %s", animeTitle, epStr)
 
 				logger.Infof("RESOLVE_START", "Resolving stream links for %s (session: %s)...", jobID, ep.Session)
 
@@ -390,6 +392,7 @@ func (a *App) IsOnline() bool {
 }
 
 func (a *App) RetryFailed(animeTitle string) error {
+	logger.Infof("APP_RETRY_FAILED", "Retrying failed downloads for anime %q", animeTitle)
 	a.slugsMu.Lock()
 	slug, ok := a.animeSlugs[animeTitle]
 	a.slugsMu.Unlock()
@@ -418,6 +421,7 @@ func (a *App) RetryFailed(animeTitle string) error {
 }
 
 func (a *App) CancelAnimeDownloads(animeTitle string) error {
+	logger.Infof("APP_CANCEL_DOWNLOADS", "Cancelling all downloads for anime %q", animeTitle)
 	if a.dlManager == nil {
 		return fmt.Errorf("no downloads manager active")
 	}

@@ -64,7 +64,7 @@ type Manager struct {
 	activeJobs   map[string]activeJob
 	runCounter   int64
 	cancelMu     sync.Mutex
-	cancelledIDs map[string]bool // tracks IDs that were explicitly cancelled to block re-submission
+	cancelledIDs map[string]time.Time // tracks IDs that were explicitly cancelled to block re-submission with a TTL
 }
 
 func NewManager(maxParallel int, ua string) *Manager {
@@ -74,7 +74,7 @@ func NewManager(maxParallel int, ua string) *Manager {
 		progress:     make(map[string]*JobProgress),
 		jobsChan:     make(chan Job, 1000),
 		activeJobs:   make(map[string]activeJob),
-		cancelledIDs: make(map[string]bool),
+		cancelledIDs: make(map[string]time.Time),
 	}
 	m.StartWorkers()
 	return m
@@ -108,6 +108,17 @@ func (m *Manager) SetMaxParallel(n int) {
 	}
 }
 
+// pruneCancelledIDs removes entries from cancelledIDs that are older than 10 minutes.
+// Must be called with cancelMu held.
+func (m *Manager) pruneCancelledIDs() {
+	now := time.Now()
+	for id, t := range m.cancelledIDs {
+		if now.Sub(t) > 10*time.Minute {
+			delete(m.cancelledIDs, id)
+		}
+	}
+}
+
 func (m *Manager) Submit(job Job) {
 	if job.ID == "" {
 		anime := job.AnimeTitle
@@ -123,7 +134,9 @@ func (m *Manager) Submit(job Job) {
 
 	// Block re-submission of explicitly cancelled jobs
 	m.cancelMu.Lock()
-	if m.cancelledIDs[job.ID] {
+	m.pruneCancelledIDs()
+	_, isCancelled := m.cancelledIDs[job.ID]
+	if isCancelled {
 		m.cancelMu.Unlock()
 		logger.Infof("QUEUE_BLOCKED", "Blocked re-submission of cancelled job: %s", job.ID)
 		return
@@ -210,7 +223,7 @@ func (m *Manager) downloadWorker(job Job) {
 
 func (m *Manager) UpdateProgress(id, anime string, epNum float64, status string, progress float64, speed, eta, errMsg string) {
 	m.cancelMu.Lock()
-	isCancelled := m.cancelledIDs[id]
+	_, isCancelled := m.cancelledIDs[id]
 	m.cancelMu.Unlock()
 
 	if isCancelled {
@@ -259,7 +272,8 @@ func killProcessTree(pid int) error {
 
 func (m *Manager) CancelJob(id string) {
 	m.cancelMu.Lock()
-	m.cancelledIDs[id] = true // mark as cancelled to block any future re-submission
+	m.pruneCancelledIDs()
+	m.cancelledIDs[id] = time.Now() // mark as cancelled to block any future re-submission
 	if act, ok := m.activeJobs[id]; ok {
 		act.cancel()
 		if act.cmd != nil {
@@ -291,6 +305,7 @@ func (m *Manager) CancelJob(id string) {
 // Called when the user explicitly initiates a fresh StartDownload.
 func (m *Manager) ClearCancelled(ids ...string) {
 	m.cancelMu.Lock()
+	m.pruneCancelledIDs()
 	for _, id := range ids {
 		delete(m.cancelledIDs, id)
 	}
@@ -572,17 +587,6 @@ func (m *Manager) downloadHLS(ctx context.Context, job Job) error {
 		if isFfmpegCallable(localPath) {
 			if abs, err := filepath.Abs(localPath); err == nil {
 				ffmpegPath = abs
-			}
-		}
-	}
-	if ffmpegPath == "" {
-		if p, err := exec.LookPath("ffmpeg"); err == nil {
-			if isFfmpegCallable(p) {
-				if abs, err := filepath.Abs(p); err == nil {
-					ffmpegPath = abs
-				} else {
-					ffmpegPath = p
-				}
 			}
 		}
 	}

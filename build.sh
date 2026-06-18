@@ -1,6 +1,19 @@
-
 set -e
 
+
+echo "Stopping any running Zensu instances..."
+if command -v taskkill &> /dev/null; then
+    taskkill //F //IM zensu.exe &> /dev/null || true
+    taskkill //F //IM zensu-cli.exe &> /dev/null || true
+fi
+if command -v killall &> /dev/null; then
+    killall zensu &> /dev/null || true
+    killall zensu-cli &> /dev/null || true
+fi
+
+
+echo "Cleaning old build directory..."
+rm -rf build/bin/ || true
 
 WAILS_CMD="wails"
 if ! command -v wails &> /dev/null; then

@@ -509,6 +509,12 @@ async function updateDownloadsProgress() {
             } else if (queuedCount > 0) {
                 combinedETASecs = Math.ceil(totalRemainingSecs / 3);
             }
+
+            let etaText = '--';
+            if (combinedETASecs > 0) {
+                etaText = formatSeconds(combinedETASecs);
+            }
+
             const showCancel = (downloadingCount > 0 || queuedCount > 0) && !cancelledGroups.has(groupName);
 
             // Check if group is expanded

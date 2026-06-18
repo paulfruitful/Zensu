@@ -101,7 +101,7 @@ func (c *Client) Get(rawURL string, extraHeaders map[string]string) (string, err
 		return "", fmt.Errorf("HTTP %d for %s", resp.StatusCode, rawURL)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
 	if err != nil {
 		logger.Errorf("API_GET_READ_ERR", "Failed to read body from %s: %v", rawURL, err)
 		return "", err
@@ -158,7 +158,7 @@ func (c *Client) GetRawBytes(rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, rawURL)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
 		logger.Errorf("API_BYTES_READ_ERR", "Failed to read raw bytes from %s: %v", rawURL, err)
 		return nil, err

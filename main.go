@@ -46,6 +46,7 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 20, G: 20, B: 30, A: 255},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		Logger:           &logger.WailsLogger{},
 		Bind: []interface{}{
 			app,
 		},

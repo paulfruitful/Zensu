@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 type Config struct {
@@ -19,7 +20,10 @@ type Config struct {
 	Domain      string `json:"domain"`
 }
 
-var loaded *Config
+var (
+	loaded   *Config
+	configMu sync.RWMutex
+)
 
 func GetConfigPath() (string, error) {
 	dir, err := os.UserConfigDir()
@@ -27,16 +31,21 @@ func GetConfigPath() (string, error) {
 		return "", err
 	}
 	zensuDir := filepath.Join(dir, "zensu")
-	if err := os.MkdirAll(zensuDir, 0755); err != nil {
+	if err := os.MkdirAll(zensuDir, 0700); err != nil {
 		return "", err
 	}
+	_ = os.Chmod(zensuDir, 0700)
 	return filepath.Join(zensuDir, "config.json"), nil
 }
 
 func Load() (*Config, error) {
+	configMu.RLock()
 	if loaded != nil {
-		return loaded, nil
+		cfg := *loaded
+		configMu.RUnlock()
+		return &cfg, nil
 	}
+	configMu.RUnlock()
 
 	cfgPath, err := GetConfigPath()
 	if err != nil {
@@ -56,8 +65,11 @@ func Load() (*Config, error) {
 		if err := cfg.Save(); err != nil {
 			return nil, err
 		}
+		configMu.Lock()
 		loaded = &cfg
-		return loaded, nil
+		cfgCopy := *loaded
+		configMu.Unlock()
+		return &cfgCopy, nil
 	}
 
 	var cfg Config
@@ -101,8 +113,11 @@ func Load() (*Config, error) {
 		cfg.Domain = "https://" + cfg.Domain
 	}
 
+	configMu.Lock()
 	loaded = &cfg
-	return loaded, nil
+	cfgCopy := *loaded
+	configMu.Unlock()
+	return &cfgCopy, nil
 }
 
 func (c *Config) Save() error {
@@ -117,7 +132,18 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, data, 0644)
+	err = os.WriteFile(cfgPath, data, 0600)
+	if err == nil {
+		_ = os.Chmod(cfgPath, 0600)
+		configMu.Lock()
+		if loaded != nil {
+			*loaded = *c
+		} else {
+			loaded = c
+		}
+		configMu.Unlock()
+	}
+	return err
 }
 
 func defaultDownloadDir() string {
