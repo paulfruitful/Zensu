@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"zensu/internal/api"
+	"zensu/internal/chrome"
 	"zensu/internal/config"
 	"zensu/internal/dl"
 	"zensu/internal/kwik"
@@ -162,6 +163,27 @@ func (a *App) SelectDirectory() (string, error) {
 
 func (a *App) GetConfig() (*config.Config, error) {
 	return config.Load()
+}
+
+func (a *App) FetchCredentialsFromChrome() (map[string]string, error) {
+	logger.Infof("APP_FETCH_CREDENTIALS", "Triggering Chrome credentials solver...")
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Errorf("APP_CONFIG_ERR", "Failed to load config: %v", err)
+		return nil, fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	credentials, err := chrome.FetchCredentials(cfg.Domain)
+	if err != nil {
+		logger.Errorf("APP_CHROME_CDP_ERR", "Failed to fetch credentials via Chrome: %v", err)
+		return nil, fmt.Errorf("failed to fetch credentials via Chrome: %w", err)
+	}
+
+	logger.Infof("APP_FETCH_CREDENTIALS_OK", "Successfully fetched credentials from Chrome: UA length=%d, CF length=%d", len(credentials.UA), len(credentials.CF))
+	return map[string]string{
+		"ua": credentials.UA,
+		"cf": credentials.CF,
+	}, nil
 }
 
 func (a *App) SaveConfig(ua, cf, downloadDir, quality, audio, domain string, maxParallel int) error {

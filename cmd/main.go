@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"zensu/internal/api"
+	"zensu/internal/chrome"
 	"zensu/internal/config"
 	"zensu/internal/dl"
 	"zensu/internal/kwik"
@@ -38,6 +39,13 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		fatalf("config error: %v\n", err)
+	}
+
+	if cfg.UA == "" || cfg.CF == "" {
+		fmt.Println("  \033[33m[INFO]\033[0m Missing Cloudflare credentials (UA or cf_clearance).")
+		if err := refreshCredentials(cfg); err != nil {
+			fatalf("failed to resolve Cloudflare credentials: %v\n", err)
+		}
 	}
 
 	client, err := api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
@@ -66,6 +74,20 @@ func main() {
 
 	fmt.Println("\n  \033[32m[INFO]\033[0m Searching...")
 	results, err := client.Search(searchTerm)
+	if err != nil && strings.Contains(err.Error(), "403") {
+		fmt.Println("  \033[33m[WARN]\033[0m Cloudflare clearance expired or invalid.")
+		if err := refreshCredentials(cfg); err != nil {
+			fatalf("failed to refresh credentials: %v\n", err)
+		}
+		// Reinitialize clients with the new cookies
+		client, err = api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
+		if err != nil {
+			fatalf("failed to re-init client: %v\n", err)
+		}
+		extractor = kwik.NewExtractor(cfg.UA, cfg.Cookies)
+		manager = dl.NewManager(cfg.MaxParallel, cfg.UA)
+		results, err = client.Search(searchTerm)
+	}
 	if err != nil {
 		fatalf("search failed: %v\n", err)
 	}
@@ -86,6 +108,20 @@ func main() {
 
 	fmt.Println("\n  \033[32m[INFO]\033[0m Fetching episodes...")
 	episodes, err := client.GetEpisodes(slug)
+	if err != nil && strings.Contains(err.Error(), "403") {
+		fmt.Println("  \033[33m[WARN]\033[0m Cloudflare clearance expired or invalid.")
+		if err := refreshCredentials(cfg); err != nil {
+			fatalf("failed to refresh credentials: %v\n", err)
+		}
+		// Reinitialize clients with the new cookies
+		client, err = api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
+		if err != nil {
+			fatalf("failed to re-init client: %v\n", err)
+		}
+		extractor = kwik.NewExtractor(cfg.UA, cfg.Cookies)
+		manager = dl.NewManager(cfg.MaxParallel, cfg.UA)
+		episodes, err = client.GetEpisodes(slug)
+	}
 	if err != nil {
 		fatalf("failed to fetch episodes: %v\n", err)
 	}
@@ -282,3 +318,21 @@ func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "  \033[31m[ERROR]\033[0m "+format, args...)
 	os.Exit(1)
 }
+
+func refreshCredentials(cfg *config.Config) error {
+	fmt.Println("  \033[33m[INFO]\033[0m Launching Chrome to solve Cloudflare challenge...")
+	fmt.Println("         (Please click/solve any verification challenge if prompted)")
+	credentials, err := chrome.FetchCredentials(cfg.Domain)
+	if err != nil {
+		return err
+	}
+	cfg.UA = credentials.UA
+	cfg.CF = credentials.CF
+	cfg.Cookies = "cf_clearance=" + credentials.CF
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	fmt.Println("  \033[32m[SUCCESS]\033[0m Credentials fetched and saved successfully!")
+	return nil
+}
+

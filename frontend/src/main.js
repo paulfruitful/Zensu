@@ -11,7 +11,8 @@ import {
     GetPosterBase64,
     IsOnline,
     RetryFailed,
-    CancelAnimeDownloads
+    CancelAnimeDownloads,
+    FetchCredentialsFromChrome
 } from '../wailsjs/go/main/App';
 
 function applyTheme(theme) {
@@ -66,6 +67,7 @@ const settingsParallel = document.getElementById('setting-parallel');
 const settingsTheme = document.getElementById('setting-theme');
 const saveSettingsBtn = document.getElementById('save-settings-btn');
 const btnBrowseDir = document.getElementById('btn-browse-dir');
+const btnFetchCf = document.getElementById('btn-fetch-cf');
 const saveStatus = document.getElementById('save-status');
 
 const episodeModal = document.getElementById('episode-modal');
@@ -125,6 +127,36 @@ btnBrowseDir.addEventListener('click', async () => {
         }
     } catch (err) {
         console.error('Directory selection failed:', err);
+    }
+});
+
+btnFetchCf.addEventListener('click', async () => {
+    btnFetchCf.disabled = true;
+    const originalText = btnFetchCf.textContent;
+    btnFetchCf.textContent = 'Opening Chrome...';
+    try {
+        const result = await FetchCredentialsFromChrome();
+        if (result && result.ua && result.cf) {
+            settingsUa.value = result.ua;
+            settingsCf.value = result.cf;
+            btnFetchCf.textContent = 'Success!';
+            btnFetchCf.style.border = '1px solid #10b981';
+            btnFetchCf.style.boxShadow = '0 0 10px rgba(16, 185, 129, 0.2)';
+            setTimeout(() => {
+                btnFetchCf.disabled = false;
+                btnFetchCf.textContent = originalText;
+                btnFetchCf.style.border = '';
+                btnFetchCf.style.boxShadow = '';
+            }, 3000);
+        } else {
+            throw new Error('Retrieved credentials were empty. Make sure you solved the Cloudflare challenge if prompted.');
+        }
+    } catch (err) {
+        alert(`Failed to fetch credentials: ${err}`);
+        btnFetchCf.disabled = false;
+        btnFetchCf.textContent = originalText;
+        btnFetchCf.style.border = '';
+        btnFetchCf.style.boxShadow = '';
     }
 });
 
