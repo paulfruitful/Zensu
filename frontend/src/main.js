@@ -786,3 +786,18 @@ function updateOnlineStatus(online) {
 
 checkConnectivity();
 setInterval(checkConnectivity, 3000);
+
+if (window.runtime) {
+    window.runtime.EventsOn("credentials_updated", (data) => {
+        if (data && data.ua && data.cf) {
+            settingsUa.value = data.ua;
+            settingsCf.value = data.cf;
+            
+            saveStatus.className = 'save-status-msg success';
+            saveStatus.textContent = 'Clearance credentials automatically resolved!';
+            setTimeout(() => {
+                saveStatus.textContent = '';
+            }, 5000);
+        }
+    });
+}

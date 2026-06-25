@@ -41,17 +41,43 @@ func main() {
 		fatalf("config error: %v\n", err)
 	}
 
-	if cfg.UA == "" || cfg.CF == "" {
-		fmt.Println("  \033[33m[INFO]\033[0m Missing Cloudflare credentials (UA or cf_clearance).")
-		if err := refreshCredentials(cfg); err != nil {
-			fatalf("failed to resolve Cloudflare credentials: %v\n", err)
+	needsSolve := cfg.UA == "" || cfg.CF == ""
+	var client *api.Client
+
+	if !needsSolve {
+		var clientErr error
+		client, clientErr = api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
+		if clientErr == nil {
+			fmt.Println("  \033[32m[INFO]\033[0m Testing connection to domain...")
+			if connErr := client.TestConnection(); connErr != nil {
+				logger.Warnf("CLI_STARTUP_CONN_FAIL", "Connection test failed: %v", connErr)
+				fmt.Printf("  \033[33m[WARN]\033[0m Connection test failed: %v\n", connErr)
+				needsSolve = true
+			} else {
+				fmt.Println("  \033[32m[SUCCESS]\033[0m Connection test passed! Credentials are valid.")
+			}
+		} else {
+			needsSolve = true
 		}
 	}
 
-	client, err := api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
-	if err != nil {
-		fatalf("failed to init client: %v\n", err)
+	if needsSolve {
+		if cfg.UA == "" || cfg.CF == "" {
+			fmt.Println("  \033[33m[INFO]\033[0m Missing Cloudflare credentials (UA or cf_clearance).")
+		} else {
+			fmt.Println("  \033[33m[INFO]\033[0m Clearance cookies are expired or invalid.")
+		}
+		if err := refreshCredentials(cfg); err != nil {
+			fatalf("failed to resolve Cloudflare credentials: %v\n", err)
+		}
+
+		var clientErr error
+		client, clientErr = api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
+		if clientErr != nil {
+			fatalf("failed to init client: %v\n", clientErr)
+		}
 	}
+
 	extractor := kwik.NewExtractor(cfg.UA, cfg.Cookies)
 	manager := dl.NewManager(cfg.MaxParallel, cfg.UA)
 
