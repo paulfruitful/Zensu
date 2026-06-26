@@ -6,15 +6,15 @@
   <img src="https://img.shields.io/badge/Language-Go%20%7C%20JS-blueviolet?style=for-the-badge&logo=go&logoColor=white" alt="Language" />
   <img src="https://img.shields.io/badge/Framework-Wails%20v2-00F2FE?style=for-the-badge&logo=wails&logoColor=black" alt="Framework" />
   <img src="https://img.shields.io/badge/Bypass-Chrome%20CDP%20%7C%20TLS-ff4a5a?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Bypass" />
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20Android-green?style=for-the-badge" alt="Platform" />
+  <img src="https://img.shields.io/badge/Server-Embedded%20%7C%20CORS%20Proxy-brightgreen?style=for-the-badge" alt="Server" />
 </p>
 
 <h1 align="center">
   <img src="assets/appicon.png" alt="Zensu Logo" width="70" style="border-radius: 14px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08);" /><br>
   Zensu
 </h1>
-<p align="center"><b>A premium, glassmorphic dark-themed downloader for AnimePahe.</b><br>
-Features native TLS fingerprinting, automated Cloudflare solver, and modular multi-platform runtimes (Desktop GUI + CLI).
+<p align="center"><b>A premium, glassmorphic dark-themed downloader & background streaming server for AnimePahe.</b><br>
+Features native TLS fingerprinting, automated Cloudflare solver, modular multi-platform runtimes, and local HLS segment CORS proxying.
 </p>
 
 ---
@@ -29,14 +29,16 @@ Features native TLS fingerprinting, automated Cloudflare solver, and modular mul
         <li><b>Concurrent Downloads:</b> Segmented parallel streams for maximum network utilization.</li>
         <li><b>TLS Fingerprinting:</b> Client hello simulation to slip past bot blockers undetected.</li>
         <li><b>HLS Resiliency:</b> Automatic recovery and dynamic fragment concatenation.</li>
+        <li><b>Embedded Streaming Server:</b> Background server for live-streaming without prior downloading.</li>
       </ul>
     </td>
     <td width="50%" valign="top">
       <h3>🧠 Self-Healing System</h3>
       <ul>
-        <li><b>Chrome CDP Solver:</b> Automated launch of debug browser to harvest clearance tokens.</li>
-        <li><b>Auto-FFmpeg Resolver:</b> Downloads and hooks architecture-specific binaries on-the-fly.</li>
-        <li><b>Zero Node.js dependency:</b> Native Go Edwards Deobfuscator executes JavaScript packers.</li>
+        <li><b>Chrome CDP Solver:</b> Automated browser challenge solving to harvest clearance cookies.</li>
+        <li><b>CORS Rewriter:</b> Bypasses browser CORS policy blocks by proxying and rewriting HLS playlists on-the-fly.</li>
+        <li><b>Zero Node.js dependency:</b> Native Go deobfuscator unpacks javascript encoders instantly.</li>
+        <li><b>Socket Port Transitioning:</b> Port changes dynamically restart active sockets in real-time.</li>
       </ul>
     </td>
   </tr>
@@ -51,7 +53,7 @@ Zensu operates with a smart **self-healing authentication loop**. It checks conn
 ```mermaid
 graph TD
     A([Launch Zensu]) --> B{Test Connection}
-    B -- "Clearance Valid (200 OK)" --> C[Ready to Search & Download]
+    B -- "Clearance Valid (200 OK)" --> C[Ready to Search & Stream]
     B -- "Expired/Missing (403 Blocked)" --> D[Launch Debug Chrome]
     D --> E[User/Auto Solves Cloudflare Challenge]
     E --> F[Extract cf_clearance & User-Agent]
@@ -64,6 +66,53 @@ graph TD
     style D fill:#1a1b26,stroke:#f7768e,stroke-width:2px,color:#fff
     style G fill:#1a1b26,stroke:#73daca,stroke-width:2px,color:#fff
 ```
+
+---
+
+## 📺 Local HTTP Streaming Server
+
+Zensu embeds a high-performance **HTTP Streaming Server** directly in the application backend (which is also compileable as a standalone CLI target). It serves as a middleman proxy that streams media packets to external media players (such as VLC, MPV, ExoPlayer, or custom web interfaces).
+
+### ⚙️ Features
+* **On-the-Fly Range Seeking:** Forwarding of incoming HTTP `Range` headers to the source CDNs, enabling smooth scrubbing and zero-latency timeline navigation.
+* **CORS Playlist Rewriter:** Resolves browser security blocks by reading `.m3u8` playlists and rewriting segment and key links to point back to the local proxy.
+* **Dynamic GUI Socket Control:** Instantly starts, stops, or migrates to a different server port directly from the settings panel.
+
+### 🔗 Stream Resolution Sequence
+
+```mermaid
+sequenceDiagram
+    participant Player as Streaming Client (e.g., VLC, Web Player)
+    participant Server as Zensu Server (Local)
+    participant Kwik as Kwik Redirector
+    participant CDN as Anime CDN (e.g., uwucdn.top)
+
+    Player->>Server: GET /api/stream?slug=...&session=...
+    Server->>Kwik: Resolve Embed URL (User-Agent, Cookies)
+    Kwik-->>Server: Return HLS Playlist (.m3u8) URL
+    Server->>CDN: Download Playlist
+    CDN-->>Server: Return Playlist Content
+    Note over Server: Rewrites absolute/relative segment<br/>URLs to point to Local Server Proxy
+    Server-->>Player: Return Rewritten Playlist (.m3u8) with CORS Headers
+    
+    Player->>Server: GET /api/stream?proxy_url=CDN_segment.ts
+    Server->>CDN: Request segment (forward User-Agent, Referer, Range)
+    CDN-->>Server: Segment bytes (206 Partial Content)
+    Server-->>Player: Stream segment bytes with Local CORS headers
+```
+
+### 🛰️ API Endpoints
+
+#### `GET /api/search?q=<query>`
+Searches anime titles. Returns matched sessions and poster URLs.
+
+#### `GET /api/episodes?slug=<anime-session-slug>`
+Retrieves the full index of releases and stream keys for the specified anime.
+
+#### `GET /api/stream?slug=<slug>&session=<episode-session>&title=<optional>`
+Serves the stream data.
+* If the episode is already downloaded to the local directory (matched via the optional `title`), it is streamed instantly from your hard drive via zero-latency Go static file serving.
+* If not downloaded, it dynamically proxies and streams remote segment packets while rewriting playlist files.
 
 ---
 
@@ -95,7 +144,7 @@ Choose the setup script matching your operating system:
   ./build.sh
   ```
 
-All compiled binaries will be built into the `build/` directory.
+All compiled binaries will be built into the `build/bin/` and `build/bin/cli/` directories.
 
 ---
 
@@ -103,12 +152,18 @@ All compiled binaries will be built into the `build/` directory.
 
 ### 🪐 Desktop GUI
 Launch the visual binary: `.\build\bin\zensu.exe`
-- **Zero-Click Bypass:** Verifies cookies on startup, opening Chrome in the background only if clearance expired.
-- **Glassmorphic UI:** A dark, visually pleasing user interface styled for fluid animations.
-- **Interactive Directory Picker:** Scan local directories for existing episodes dynamically.
+* **Zero-Click Bypass:** Verifies cookies on startup, opening Chrome in the background only if clearance expired.
+* **Streaming settings:** Change streaming port, toggle automatic server startup, or manually restart the background listener.
+* **Glassmorphic UI:** A dark, visually pleasing user interface styled for fluid animations.
 
-### 💻 Command-Line Interface (CLI)
-For lightweight or remote terminal environments (including Termux/SSH):
+### 💻 Standalone Server Binary
+Run the dedicated backend target on a terminal server, NAS, or remote VPS:
+* **Windows**: `build\bin\cli\zensu-server.exe`
+* **Linux**: `./build/bin/cli/zensu-server`
+* **Android/Termux**: `./build/bin/cli/zensu-server-termux`
+
+### 🖥️ Client Downloader CLI
+For lightweight terminal downloading:
 * **Windows**: `build\bin\cli\zensu-cli.exe`
 * **Linux**: `./build/bin/cli/zensu-cli`
 * **Android/Termux**: `./build/bin/cli/zensu-termux`
@@ -129,7 +184,9 @@ Your preferences are managed automatically in OS-native app data directories:
   "maxParallel": 3,
   "quality": "1080",
   "audio": "jpn",
-  "domain": "https://animepahe.pw"
+  "domain": "https://animepahe.pw",
+  "serverPort": 8080,
+  "serverAutoStart": true
 }
 ```
 
