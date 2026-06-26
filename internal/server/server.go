@@ -6,9 +6,11 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"zensu/internal/api"
@@ -90,6 +92,13 @@ func handleEpisodes(client *api.Client) http.HandlerFunc {
 
 func handleStream(client *api.Client, extractor *kwik.Extractor, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		proxyURL := r.URL.Query().Get("proxy_url")
+		if proxyURL != "" {
+			logger.Infof("SERVER_STREAM_PROXY_RAW", "Proxying raw chunk/stream: %s", proxyURL)
+			proxyStream(w, r, proxyURL, cfg.UA)
+			return
+		}
+
 		slug := r.URL.Query().Get("slug")
 		epSession := r.URL.Query().Get("session")
 		title := r.URL.Query().Get("title")
@@ -163,10 +172,52 @@ func handleStream(client *api.Client, extractor *kwik.Extractor, cfg *config.Con
 			return
 		}
 
-		dlURL, _, err := extractor.GetDownloadURL(kwikURL)
+		dlURL, isHLS, err := extractor.GetDownloadURL(kwikURL)
 		if err != nil {
 			logger.Errorf("SERVER_STREAM_EXTRACT_ERR", "Failed to extract direct download URL: %v", err)
 			http.Error(w, fmt.Sprintf("extraction failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		if isHLS {
+			logger.Infof("SERVER_STREAM_HLS", "Proxying and rewriting HLS playlist: %s", dlURL)
+			parsedBaseURL, err := url.Parse(dlURL)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("invalid remote playlist URL: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, dlURL, nil)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			req.Header.Set("User-Agent", cfg.UA)
+			req.Header.Set("Referer", "https://kwik.cx/")
+			if cfg.Cookies != "" {
+				req.Header.Set("Cookie", cfg.Cookies)
+			}
+
+			httpClient := &http.Client{}
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("failed to fetch remote playlist: %v", err), http.StatusBadGateway)
+				return
+			}
+			defer resp.Body.Close()
+
+			playlistBytes, err := io.ReadAll(resp.Body)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("failed to read remote playlist: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			rewritten := rewriteM3U8(string(playlistBytes), parsedBaseURL, r.Host)
+
+			w.Header().Set("Content-Type", "application/x-mpegURL")
+			w.Header().Set("Content-Length", strconv.Itoa(len(rewritten)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(rewritten))
 			return
 		}
 
@@ -211,4 +262,45 @@ func proxyStream(w http.ResponseWriter, r *http.Request, rawURL string, ua strin
 
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+func rewriteM3U8(content string, baseURL *url.URL, requestHost string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "#") {
+			// Check if it's a tag that has a URI parameter, e.g. URI="something"
+			if strings.Contains(trimmed, "URI=") {
+				re := regexp.MustCompile(`URI="([^"]+)"`)
+				lines[i] = re.ReplaceAllStringFunc(trimmed, func(match string) string {
+					sub := re.FindStringSubmatch(match)
+					if len(sub) < 2 {
+						return match
+					}
+					uVal := sub[1]
+					resolved := resolveURL(uVal, baseURL)
+					proxyURL := fmt.Sprintf("http://%s/api/stream?proxy_url=%s", requestHost, url.QueryEscape(resolved))
+					return fmt.Sprintf(`URI="%s"`, proxyURL)
+				})
+			}
+			continue
+		}
+
+		// Otherwise, it's a segment/playlist URL
+		resolved := resolveURL(trimmed, baseURL)
+		lines[i] = fmt.Sprintf("http://%s/api/stream?proxy_url=%s", requestHost, url.QueryEscape(resolved))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func resolveURL(ref string, base *url.URL) string {
+	u, err := url.Parse(ref)
+	if err != nil {
+		return ref
+	}
+	return base.ResolveReference(u).String()
 }
