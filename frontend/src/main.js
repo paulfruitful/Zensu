@@ -12,7 +12,10 @@ import {
     IsOnline,
     RetryFailed,
     CancelAnimeDownloads,
-    FetchCredentialsFromChrome
+    FetchCredentialsFromChrome,
+    StartStreamingServer,
+    StopStreamingServer,
+    GetServerStatus
 } from '../wailsjs/go/main/App';
 
 function applyTheme(theme) {
@@ -70,6 +73,11 @@ const btnBrowseDir = document.getElementById('btn-browse-dir');
 const btnFetchCf = document.getElementById('btn-fetch-cf');
 const saveStatus = document.getElementById('save-status');
 
+const settingsServerPort = document.getElementById('setting-server-port');
+const settingsServerAutostart = document.getElementById('setting-server-autostart');
+const serverStatusBadge = document.getElementById('server-status-badge');
+const btnToggleServer = document.getElementById('btn-toggle-server');
+
 const episodeModal = document.getElementById('episode-modal');
 const modalAnimeTitle = document.getElementById('modal-anime-title');
 const modalStatusText = document.getElementById('modal-status-text');
@@ -114,10 +122,60 @@ async function loadSettings() {
         settingsAudio.value = cfg.audio || 'jpn';
         settingsParallel.value = String(cfg.maxParallel || 3);
         settingsTheme.value = localStorage.getItem('theme') || 'glow';
+        settingsServerPort.value = String(cfg.serverPort || 8080);
+        settingsServerAutostart.checked = !!cfg.serverAutoStart;
+        
+        await updateServerStatusUI();
     } catch (err) {
         console.error('Failed to load settings:', err);
     }
 }
+
+async function updateServerStatusUI() {
+    try {
+        const [running, port] = await GetServerStatus();
+        updateServerUI(running, port);
+    } catch (err) {
+        console.error('Failed to get server status:', err);
+        serverStatusBadge.textContent = 'Unknown';
+        serverStatusBadge.style.color = '#ef4444';
+        btnToggleServer.textContent = 'Start Server';
+        btnToggleServer.disabled = false;
+    }
+}
+
+function updateServerUI(running, port) {
+    if (running) {
+        serverStatusBadge.textContent = `Running on http://127.0.0.1:${port}`;
+        serverStatusBadge.style.color = '#10b981';
+        btnToggleServer.textContent = 'Stop Server';
+        btnToggleServer.classList.remove('btn-primary');
+        btnToggleServer.style.background = '#ef4444';
+    } else {
+        serverStatusBadge.textContent = 'Stopped';
+        serverStatusBadge.style.color = 'var(--text-secondary)';
+        btnToggleServer.textContent = 'Start Server';
+        btnToggleServer.style.background = '';
+        btnToggleServer.classList.add('btn-primary');
+    }
+}
+
+btnToggleServer.addEventListener('click', async () => {
+    btnToggleServer.disabled = true;
+    try {
+        const [running, port] = await GetServerStatus();
+        if (running) {
+            await StopStreamingServer();
+        } else {
+            await StartStreamingServer();
+        }
+    } catch (err) {
+        alert(`Failed to toggle server: ${err}`);
+    } finally {
+        btnToggleServer.disabled = false;
+        await updateServerStatusUI();
+    }
+});
 
 btnBrowseDir.addEventListener('click', async () => {
     try {
@@ -172,7 +230,9 @@ settingsForm.addEventListener('submit', async (e) => {
             settingsQuality.value,
             settingsAudio.value,
             settingsDomain.value.trim(),
-            parseInt(settingsParallel.value, 10)
+            parseInt(settingsParallel.value, 10),
+            parseInt(settingsServerPort.value, 10) || 8080,
+            settingsServerAutostart.checked
         );
         saveStatus.classList.add('success');
         saveStatus.textContent = 'Settings saved successfully!';
@@ -182,6 +242,7 @@ settingsForm.addEventListener('submit', async (e) => {
         applyTheme(settingsTheme.value);
 
         setTimeout(() => { saveStatus.textContent = ''; }, 3000);
+        await updateServerStatusUI();
     } catch (err) {
         saveStatus.classList.add('error');
         saveStatus.textContent = `Error: ${err}`;
@@ -798,6 +859,12 @@ if (window.runtime) {
             setTimeout(() => {
                 saveStatus.textContent = '';
             }, 5000);
+        }
+    });
+
+    window.runtime.EventsOn("server_status_changed", (data) => {
+        if (data) {
+            updateServerUI(data.running, data.port);
         }
     });
 }

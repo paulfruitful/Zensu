@@ -30,6 +30,10 @@ export function GetProgress() {
   return window['go']['main']['App']['GetProgress']();
 }
 
+export function GetServerStatus() {
+  return window['go']['main']['App']['GetServerStatus']();
+}
+
 export function IsOnline() {
   return window['go']['main']['App']['IsOnline']();
 }
@@ -38,8 +42,8 @@ export function RetryFailed(arg1) {
   return window['go']['main']['App']['RetryFailed'](arg1);
 }
 
-export function SaveConfig(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
-  return window['go']['main']['App']['SaveConfig'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+export function SaveConfig(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) {
+  return window['go']['main']['App']['SaveConfig'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
 }
 
 export function SearchAnime(arg1) {
@@ -52,4 +56,12 @@ export function SelectDirectory() {
 
 export function StartDownload(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartDownload'](arg1, arg2, arg3);
+}
+
+export function StartStreamingServer() {
+  return window['go']['main']['App']['StartStreamingServer']();
+}
+
+export function StopStreamingServer() {
+  return window['go']['main']['App']['StopStreamingServer']();
 }

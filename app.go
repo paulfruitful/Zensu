@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,18 +22,23 @@ import (
 	"zensu/internal/dl"
 	"zensu/internal/kwik"
 	"zensu/internal/logger"
+	"zensu/internal/server"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
-	ctx        context.Context
-	dlManager  *dl.Manager
-	client     *api.Client
-	downloadMu sync.Mutex
-	resolveSem chan struct{}
-	slugsMu    sync.Mutex
-	animeSlugs map[string]string
+	ctx             context.Context
+	dlManager       *dl.Manager
+	client          *api.Client
+	downloadMu      sync.Mutex
+	resolveSem      chan struct{}
+	slugsMu         sync.Mutex
+	animeSlugs      map[string]string
+	serverMu        sync.Mutex
+	httpServer      *http.Server
+	serverPort      int
+	isServerRunning bool
 }
 
 func NewApp() *App {
@@ -95,6 +101,11 @@ func (a *App) autoCheckAndResolveCredentials() {
 			"ua": credentials.UA,
 			"cf": credentials.CF,
 		})
+	}
+
+	if cfg.ServerAutoStart {
+		logger.Infof("APP_STARTUP_AUTOSTART", "Auto-starting background streaming server...")
+		_ = a.StartStreamingServer()
 	}
 }
 
@@ -238,8 +249,8 @@ func (a *App) FetchCredentialsFromChrome() (map[string]string, error) {
 	}, nil
 }
 
-func (a *App) SaveConfig(ua, cf, downloadDir, quality, audio, domain string, maxParallel int) error {
-	logger.Infof("APP_CONFIG_SAVE", "Saving configuration: domain=%s quality=%s audio=%s maxParallel=%d downloadDir=%s", domain, quality, audio, maxParallel, downloadDir)
+func (a *App) SaveConfig(ua, cf, downloadDir, quality, audio, domain string, maxParallel int, serverPort int, serverAutoStart bool) error {
+	logger.Infof("APP_CONFIG_SAVE", "Saving configuration: domain=%s quality=%s audio=%s maxParallel=%d serverPort=%d serverAutoStart=%t downloadDir=%s", domain, quality, audio, maxParallel, serverPort, serverAutoStart, downloadDir)
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -251,7 +262,109 @@ func (a *App) SaveConfig(ua, cf, downloadDir, quality, audio, domain string, max
 	cfg.Audio = audio
 	cfg.Domain = domain
 	cfg.MaxParallel = maxParallel
-	return cfg.Save()
+
+	portChanged := cfg.ServerPort != serverPort
+	cfg.ServerPort = serverPort
+	cfg.ServerAutoStart = serverAutoStart
+
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+
+	if portChanged {
+		a.serverMu.Lock()
+		running := a.isServerRunning
+		a.serverMu.Unlock()
+		if running {
+			_ = a.StopStreamingServer()
+			_ = a.StartStreamingServer()
+		}
+	}
+
+	return nil
+}
+
+func (a *App) StartStreamingServer() error {
+	a.serverMu.Lock()
+	defer a.serverMu.Unlock()
+
+	if a.isServerRunning {
+		return fmt.Errorf("server is already running")
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	if a.client == nil {
+		a.client, err = api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
+		if err != nil {
+			return err
+		}
+	}
+	extractor := kwik.NewExtractor(cfg.UA, cfg.Cookies)
+
+	router := server.NewRouter(a.client, extractor, cfg)
+	a.serverPort = cfg.ServerPort
+	a.httpServer = &http.Server{
+		Addr:    fmt.Sprintf("127.0.0.1:%d", a.serverPort),
+		Handler: router,
+	}
+
+	go func() {
+		logger.Infof("APP_SERVER_START", "Starting background streaming server on port %d", a.serverPort)
+		if err := a.httpServer.ListenAndServe(); err != http.ErrServerClosed {
+			logger.Errorf("APP_SERVER_ERR", "Background server failed: %v", err)
+			a.serverMu.Lock()
+			a.isServerRunning = false
+			a.httpServer = nil
+			a.serverMu.Unlock()
+			wailsRuntime.EventsEmit(a.ctx, "server_status_changed", map[string]any{
+				"running": false,
+				"port":    a.serverPort,
+			})
+		}
+	}()
+
+	a.isServerRunning = true
+	wailsRuntime.EventsEmit(a.ctx, "server_status_changed", map[string]any{
+		"running": true,
+		"port":    a.serverPort,
+	})
+	return nil
+}
+
+func (a *App) StopStreamingServer() error {
+	a.serverMu.Lock()
+	defer a.serverMu.Unlock()
+
+	if !a.isServerRunning || a.httpServer == nil {
+		return fmt.Errorf("server is not running")
+	}
+
+	// Graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	if err := a.httpServer.Shutdown(ctx); err != nil {
+		_ = a.httpServer.Close()
+	}
+
+	a.isServerRunning = false
+	a.httpServer = nil
+	logger.Infof("APP_SERVER_STOP", "Background streaming server stopped")
+	wailsRuntime.EventsEmit(a.ctx, "server_status_changed", map[string]any{
+		"running": false,
+		"port":    a.serverPort,
+	})
+	return nil
+}
+
+func (a *App) GetServerStatus() (bool, int) {
+	a.serverMu.Lock()
+	defer a.serverMu.Unlock()
+	return a.isServerRunning, a.serverPort
 }
 
 func (a *App) GetProgress() []*dl.JobProgress {

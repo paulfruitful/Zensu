@@ -144,12 +144,34 @@
                         </select>
                     </div>
 
-                    <div class="settings-group">
-                        <label for="setting-theme">Application Theme</label>
-                        <select id="setting-theme">
-                            <option value="glow">Cyberpunk Glow</option>
-                            <option value="solid">Midnight Solid</option>
-                        </select>
+                    </div>
+
+                    <!-- Streaming Server Settings -->
+                    <div style="border-top: 1px solid rgba(255, 255, 255, 0.05); padding-top: 20px; margin-top: 10px;">
+                        <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 1rem; color: var(--accent-cyan);">Streaming Server Settings</h3>
+                    </div>
+
+                    <div class="settings-row">
+                        <div class="settings-group half">
+                            <label for="setting-server-port">Server Port</label>
+                            <input type="number" id="setting-server-port" min="1" max="65535" placeholder="8080" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--glass-border); border-radius: 10px; color: var(--text-primary); padding: 10px 14px; font-family: var(--font-sans); outline: none;">
+                        </div>
+                        <div class="settings-group half" style="justify-content: center; gap: 8px;">
+                            <label for="setting-server-autostart" style="cursor: pointer; display: flex; align-items: center; gap: 8px; margin-top: 22px;">
+                                <input type="checkbox" id="setting-server-autostart" style="width: auto; cursor: pointer; margin: 0;">
+                                <span>Auto-start on launch</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="settings-group" style="background: rgba(255, 255, 255, 0.01); border: 1px solid var(--glass-border); padding: 16px; border-radius: 12px; margin-top: 5px; box-sizing: border-box;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; width: 100%;">
+                            <div>
+                                <span style="font-weight: 500; font-size: 0.9rem;">Server Status:</span>
+                                <span id="server-status-badge" class="save-status-msg" style="margin-left: 8px; font-weight: 600;">Checking...</span>
+                            </div>
+                            <button type="button" class="btn-primary" id="btn-toggle-server" style="padding: 8px 16px; font-size: 0.85rem; border-radius: 8px;">Start Server</button>
+                        </div>
                     </div>
 
                     <div class="form-actions">

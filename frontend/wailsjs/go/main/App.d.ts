@@ -18,14 +18,20 @@ export function GetPosterBase64(arg1:string):Promise<string>;
 
 export function GetProgress():Promise<Array<dl.JobProgress>>;
 
+export function GetServerStatus():Promise<boolean|number>;
+
 export function IsOnline():Promise<boolean>;
 
 export function RetryFailed(arg1:string):Promise<void>;
 
-export function SaveConfig(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:number):Promise<void>;
+export function SaveConfig(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:number,arg8:number,arg9:boolean):Promise<void>;
 
 export function SearchAnime(arg1:string):Promise<Array<main.AnimeResult>>;
 
 export function SelectDirectory():Promise<string>;
 
 export function StartDownload(arg1:string,arg2:string,arg3:Array<number>):Promise<void>;
+
+export function StartStreamingServer():Promise<void>;
+
+export function StopStreamingServer():Promise<void>;

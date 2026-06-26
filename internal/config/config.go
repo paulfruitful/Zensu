@@ -10,14 +10,16 @@ import (
 )
 
 type Config struct {
-	UA          string `json:"ua"`
-	CF          string `json:"cf"`
-	Cookies     string `json:"cookies"`
-	DownloadDir string `json:"downloadDir"`
-	MaxParallel int    `json:"maxParallel"`
-	Quality     string `json:"quality"`
-	Audio       string `json:"audio"`
-	Domain      string `json:"domain"`
+	UA              string `json:"ua"`
+	CF              string `json:"cf"`
+	Cookies         string `json:"cookies"`
+	DownloadDir     string `json:"downloadDir"`
+	MaxParallel     int    `json:"maxParallel"`
+	Quality         string `json:"quality"`
+	Audio           string `json:"audio"`
+	Domain          string `json:"domain"`
+	ServerPort      int    `json:"serverPort"`
+	ServerAutoStart bool   `json:"serverAutoStart"`
 }
 
 var (
@@ -87,6 +89,10 @@ func Load() (*Config, error) {
 
 	if cfg.MaxParallel <= 0 {
 		cfg.MaxParallel = 3
+	}
+
+	if cfg.ServerPort <= 0 {
+		cfg.ServerPort = 8080
 	}
 
 	cfg.Quality = strings.ToLower(strings.TrimSpace(cfg.Quality))
