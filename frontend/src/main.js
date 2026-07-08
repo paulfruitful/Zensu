@@ -68,9 +68,11 @@ const settingsQuality = document.getElementById('setting-quality');
 const settingsAudio = document.getElementById('setting-audio');
 const settingsParallel = document.getElementById('setting-parallel');
 const settingsTheme = document.getElementById('setting-theme');
+const settingsHlsTranscode = document.getElementById('setting-hls-transcode');
 const saveSettingsBtn = document.getElementById('save-settings-btn');
 const btnBrowseDir = document.getElementById('btn-browse-dir');
 const btnFetchCf = document.getElementById('btn-fetch-cf');
+const btnClearDownloads = document.getElementById('btn-clear-downloads');
 const saveStatus = document.getElementById('save-status');
 
 const settingsServerPort = document.getElementById('setting-server-port');
@@ -121,6 +123,7 @@ async function loadSettings() {
         settingsQuality.value = cfg.quality || '1080';
         settingsAudio.value = cfg.audio || 'jpn';
         settingsParallel.value = String(cfg.maxParallel || 3);
+        settingsHlsTranscode.checked = cfg.hlsTranscode || false;
         settingsTheme.value = localStorage.getItem('theme') || 'glow';
         settingsServerPort.value = String(cfg.serverPort || 8080);
         settingsServerAutostart.checked = !!cfg.serverAutoStart;
@@ -232,7 +235,8 @@ settingsForm.addEventListener('submit', async (e) => {
             settingsDomain.value.trim(),
             parseInt(settingsParallel.value, 10),
             parseInt(settingsServerPort.value, 10) || 8080,
-            settingsServerAutostart.checked
+            settingsServerAutostart.checked,
+            settingsHlsTranscode.checked
         );
         saveStatus.classList.add('success');
         saveStatus.textContent = 'Settings saved successfully!';
@@ -793,6 +797,18 @@ async function updateDownloadsProgress() {
 }
 
 
+
+// Clear downloads handler
+if (btnClearDownloads) {
+    btnClearDownloads.addEventListener('click', async () => {
+        try {
+            await ClearProgress();
+            downloadsList.innerHTML = '<div style="color: var(--text-secondary); text-align: center; padding: 40px 0;">No active or past downloads.</div>';
+        } catch (err) {
+            console.error('Failed to clear download history:', err);
+        }
+    });
+}
 
 // Initialization
 loadSettings();

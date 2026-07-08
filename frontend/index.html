@@ -69,6 +69,7 @@
                             <h1>Downloads</h1>
                             <p>Track active episodes downloading to your system</p>
                         </div>
+                        <button class="btn-secondary btn-sm" id="btn-clear-downloads" style="height: fit-content;">Clear History</button>
                     </div>
                 </div>
 
@@ -172,6 +173,13 @@
                             </div>
                             <button type="button" class="btn-primary" id="btn-toggle-server" style="padding: 8px 16px; font-size: 0.85rem; border-radius: 8px;">Start Server</button>
                         </div>
+                    </div>
+
+                    <div class="settings-group">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="setting-hls-transcode">
+                            <span>Transcode HLS Streams (Slower, fixes video freezing/skipping issues)</span>
+                        </label>
                     </div>
 
                     <div class="form-actions">

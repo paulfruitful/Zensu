@@ -11,6 +11,7 @@ export namespace config {
 	    domain: string;
 	    serverPort: number;
 	    serverAutoStart: boolean;
+	    hlsTranscode: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -28,6 +29,7 @@ export namespace config {
 	        this.domain = source["domain"];
 	        this.serverPort = source["serverPort"];
 	        this.serverAutoStart = source["serverAutoStart"];
+	        this.hlsTranscode = source["hlsTranscode"];
 	    }
 	}
 
