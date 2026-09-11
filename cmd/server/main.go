@@ -64,6 +64,14 @@ func main() {
 			fmt.Printf("[ERROR] failed to init client: %v\n", clientErr)
 			os.Exit(1)
 		}
+
+		fmt.Println("  \033[32m[INFO]\033[0m Verifying credentials connection...")
+		if connErr := client.TestConnection(); connErr != nil {
+			logger.Errorf("SERVER_STARTUP_CONN_FAIL", "Connection test failed after refresh: %v", connErr)
+			fmt.Printf("  \033[31m[ERROR]\033[0m Connection verification failed: %v\n", connErr)
+			os.Exit(1)
+		}
+		fmt.Println("  \033[32m[SUCCESS]\033[0m Connection test passed! Credentials are valid.")
 	}
 
 	extractor := kwik.NewExtractor(cfg.UA, cfg.Cookies)
@@ -111,7 +119,11 @@ func refreshCredentials(cfg *config.Config) error {
 	}
 	cfg.UA = credentials.UA
 	cfg.CF = credentials.CF
-	cfg.Cookies = "cf_clearance=" + credentials.CF
+	if credentials.Cookies != "" {
+		cfg.Cookies = credentials.Cookies
+	} else {
+		cfg.Cookies = "cf_clearance=" + credentials.CF
+	}
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}

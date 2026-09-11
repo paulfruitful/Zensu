@@ -89,7 +89,11 @@ func (a *App) autoCheckAndResolveCredentials() {
 
 		cfg.UA = credentials.UA
 		cfg.CF = credentials.CF
-		cfg.Cookies = "cf_clearance=" + credentials.CF
+		if credentials.Cookies != "" {
+			cfg.Cookies = credentials.Cookies
+		} else {
+			cfg.Cookies = "cf_clearance=" + credentials.CF
+		}
 		if err := cfg.Save(); err != nil {
 			logger.Errorf("APP_CONFIG_SAVE_ERR", "Failed to save auto-resolved config: %v", err)
 			return

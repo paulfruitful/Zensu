@@ -16,8 +16,9 @@ import (
 )
 
 type Credentials struct {
-	UA string
-	CF string
+	UA      string
+	CF      string
+	Cookies string
 }
 
 type Target struct {
@@ -127,6 +128,7 @@ func launchChrome(chromePath string, port int, profileDir string, targetURL stri
 		fmt.Sprintf("--user-data-dir=%s", profileDir),
 		"--no-first-run",
 		"--no-default-browser-check",
+		"--disable-blink-features=AutomationControlled",
 		targetURL,
 	}
 
@@ -263,6 +265,22 @@ func getUserAgent(conn *websocket.Conn) (string, error) {
 	return result.Result.Value, nil
 }
 
+func getPageTitle(conn *websocket.Conn) (string, error) {
+	params := map[string]any{
+		"expression": "document.title",
+	}
+	resultRaw, err := sendAndReceive(conn, "Runtime.evaluate", params, 3)
+	if err != nil {
+		return "", err
+	}
+
+	var result EvaluateResult
+	if err := json.Unmarshal(resultRaw, &result); err != nil {
+		return "", err
+	}
+	return result.Result.Value, nil
+}
+
 func pollCookiesAndUA(wsURL string, domain string) (*Credentials, error) {
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -274,6 +292,8 @@ func pollCookiesAndUA(wsURL string, domain string) (*Credentials, error) {
 	ticker := time.NewTicker(1500 * time.Millisecond)
 	defer ticker.Stop()
 
+	notifiedWaiting := false
+
 	for {
 		select {
 		case <-timeout:
@@ -281,26 +301,42 @@ func pollCookiesAndUA(wsURL string, domain string) (*Credentials, error) {
 		case <-ticker.C:
 			cookies, err := getCookies(conn, domain)
 			if err != nil {
-				return nil, fmt.Errorf("failed to fetch cookies via cdp: %w", err)
+				continue
 			}
 
 			var cfClearance string
+			var cookiePairs []string
 			for _, c := range cookies {
+				cookiePairs = append(cookiePairs, fmt.Sprintf("%s=%s", c.Name, c.Value))
 				if c.Name == "cf_clearance" {
 					cfClearance = c.Value
-					break
 				}
 			}
 
-			if cfClearance != "" {
+			title, _ := getPageTitle(conn)
+			lowerTitle := strings.ToLower(title)
+			isChallenge := strings.Contains(lowerTitle, "just a moment") ||
+				strings.Contains(lowerTitle, "attention required") ||
+				strings.Contains(lowerTitle, "security verification") ||
+				strings.Contains(lowerTitle, "cloudflare") ||
+				strings.TrimSpace(title) == ""
+
+			if isChallenge && !notifiedWaiting {
+				fmt.Println("         Waiting for Cloudflare verification to complete in Chrome...")
+				notifiedWaiting = true
+			}
+
+			if cfClearance != "" && !isChallenge {
 				ua, err := getUserAgent(conn)
 				if err != nil {
 					return nil, fmt.Errorf("failed to fetch user agent via cdp: %w", err)
 				}
 				if ua != "" {
+					fullCookies := strings.Join(cookiePairs, "; ")
 					return &Credentials{
-						UA: ua,
-						CF: cfClearance,
+						UA:      ua,
+						CF:      cfClearance,
+						Cookies: fullCookies,
 					}, nil
 				}
 			}
@@ -341,6 +377,7 @@ func FetchCredentials(domain string) (*Credentials, error) {
 			return nil, fmt.Errorf("failed to get user config dir: %w", err)
 		}
 		profileDir = filepath.Join(userConfigDir, "zensu", "chrome-profile-isolated")
+		cleanProfileDir(profileDir)
 
 		cmd, err = launchChrome(chromePath, port, profileDir, domain)
 		if err != nil {

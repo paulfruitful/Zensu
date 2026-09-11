@@ -78,8 +78,22 @@ func (c *Client) Get(rawURL string, extraHeaders map[string]string) (string, err
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Sec-Fetch-Dest", "document")
 	req.Header.Set("Sec-Fetch-Mode", "navigate")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if _, hasRef := extraHeaders["Referer"]; hasRef {
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+	} else {
+		req.Header.Set("Sec-Fetch-Site", "none")
+	}
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
+
+	if strings.Contains(c.ua, "Chrome/") {
+		parts := strings.Split(c.ua, "Chrome/")
+		if len(parts) > 1 {
+			ver := strings.Split(parts[1], ".")[0]
+			req.Header.Set("Sec-Ch-Ua", fmt.Sprintf(`"Not A(Brand";v="8", "Chromium";v="%s", "Google Chrome";v="%s"`, ver, ver))
+			req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+			req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
+		}
+	}
 
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)

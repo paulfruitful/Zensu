@@ -356,7 +356,11 @@ func refreshCredentials(cfg *config.Config) error {
 	}
 	cfg.UA = credentials.UA
 	cfg.CF = credentials.CF
-	cfg.Cookies = "cf_clearance=" + credentials.CF
+	if credentials.Cookies != "" {
+		cfg.Cookies = credentials.Cookies
+	} else {
+		cfg.Cookies = "cf_clearance=" + credentials.CF
+	}
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
