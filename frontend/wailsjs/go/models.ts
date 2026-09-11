@@ -1,3 +1,34 @@
+export namespace api {
+	
+	export class MetadataResult {
+	    title: string;
+	    airingStatus: string;
+	    totalEpisodes: number;
+	    source: string;
+	    nextEpisodeNum: number;
+	    nextAiringAt: number;
+	    score: number;
+	    broadcastDay: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.airingStatus = source["airingStatus"];
+	        this.totalEpisodes = source["totalEpisodes"];
+	        this.source = source["source"];
+	        this.nextEpisodeNum = source["nextEpisodeNum"];
+	        this.nextAiringAt = source["nextAiringAt"];
+	        this.score = source["score"];
+	        this.broadcastDay = source["broadcastDay"];
+	    }
+	}
+
+}
+
 export namespace config {
 	
 	export class Config {
@@ -9,9 +40,16 @@ export namespace config {
 	    quality: string;
 	    audio: string;
 	    domain: string;
+	    provider: string;
 	    serverPort: number;
 	    serverAutoStart: boolean;
 	    hlsTranscode: boolean;
+	    browser: string;
+	    browserPath: string;
+	    minimizeToTray: boolean;
+	    enableBackgroundMonitor: boolean;
+	    autoDownloadTracked: boolean;
+	    pollIntervalMinutes: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -27,9 +65,16 @@ export namespace config {
 	        this.quality = source["quality"];
 	        this.audio = source["audio"];
 	        this.domain = source["domain"];
+	        this.provider = source["provider"];
 	        this.serverPort = source["serverPort"];
 	        this.serverAutoStart = source["serverAutoStart"];
 	        this.hlsTranscode = source["hlsTranscode"];
+	        this.browser = source["browser"];
+	        this.browserPath = source["browserPath"];
+	        this.minimizeToTray = source["minimizeToTray"];
+	        this.enableBackgroundMonitor = source["enableBackgroundMonitor"];
+	        this.autoDownloadTracked = source["autoDownloadTracked"];
+	        this.pollIntervalMinutes = source["pollIntervalMinutes"];
 	    }
 	}
 
@@ -98,6 +143,47 @@ export namespace main {
 	        this.episode = source["episode"];
 	        this.session = source["session"];
 	        this.exists = source["exists"];
+	    }
+	}
+
+}
+
+export namespace tracker {
+	
+	export class TrackedAnime {
+	    title: string;
+	    slug: string;
+	    poster: string;
+	    lastDownloadedEp: number;
+	    totalEpisodes: number;
+	    airingStatus: string;
+	    autoDownload: boolean;
+	    nextEpisodeNum: number;
+	    nextAiringAt: number;
+	    score: number;
+	    broadcastDay: string;
+	    createdAt: string;
+	    lastCheckedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TrackedAnime(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.slug = source["slug"];
+	        this.poster = source["poster"];
+	        this.lastDownloadedEp = source["lastDownloadedEp"];
+	        this.totalEpisodes = source["totalEpisodes"];
+	        this.airingStatus = source["airingStatus"];
+	        this.autoDownload = source["autoDownload"];
+	        this.nextEpisodeNum = source["nextEpisodeNum"];
+	        this.nextAiringAt = source["nextAiringAt"];
+	        this.score = source["score"];
+	        this.broadcastDay = source["broadcastDay"];
+	        this.createdAt = source["createdAt"];
+	        this.lastCheckedAt = source["lastCheckedAt"];
 	    }
 	}
 

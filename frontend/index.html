@@ -27,13 +27,18 @@
                     <span>Downloads</span>
                     <span class="badge" id="download-badge" style="display: none;">0</span>
                 </button>
+                <button class="nav-item" id="tab-tracked">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                    <span>Tracked</span>
+                    <span class="badge" id="tracked-badge" style="display: none;">0</span>
+                </button>
                 <button class="nav-item" id="tab-settings">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                     <span>Settings</span>
                 </button>
             </nav>
             <div class="sidebar-footer">
-                v1.0.0
+                v1.4.1
             </div>
         </aside>
 
@@ -47,10 +52,17 @@
                 </div>
                 
                 <div class="search-bar">
+                    <div class="provider-toggle-group" id="provider-toggle-group">
+                        <button type="button" class="provider-btn active" data-provider="animepahe">AnimePahe</button>
+                        <button type="button" class="provider-btn" data-provider="anikoto">Anikoto TV</button>
+                    </div>
                     <input type="text" id="search-input" placeholder="Type anime title..." autocomplete="off">
                     <button id="search-btn">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                         Search
+                    </button>
+                    <button id="btn-track-all" class="btn-secondary" style="display: none;" title="Track all active search results">
+                        🔔 Track All Airing
                     </button>
                 </div>
 
@@ -69,12 +81,32 @@
                             <h1>Downloads</h1>
                             <p>Track active episodes downloading to your system</p>
                         </div>
-                        <button class="btn-secondary btn-sm" id="btn-clear-downloads" style="height: fit-content;">Clear History</button>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button class="btn-secondary btn-sm" id="btn-open-download-dir" style="height: fit-content;">📁 Open Folder</button>
+                            <button class="btn-secondary btn-sm" id="btn-clear-downloads" style="height: fit-content;">Clear History</button>
+                        </div>
                     </div>
                 </div>
 
                 <div class="downloads-container" id="downloads-list">
                     <!-- Progress items will go here -->
+                </div>
+            </section>
+
+            <!-- Tracked Anime Panel -->
+            <section class="panel" id="panel-tracked">
+                <div class="panel-header">
+                    <div class="header-action-row">
+                        <div>
+                            <h1>Tracked Anime</h1>
+                            <p>Subscribed series monitored for new episode releases</p>
+                        </div>
+                        <button class="btn-secondary btn-sm" id="btn-check-updates" style="height: fit-content;">🔄 Check Updates Now</button>
+                    </div>
+                </div>
+
+                <div class="results-grid" id="tracked-results">
+                    <!-- Tracked anime cards will be populated here -->
                 </div>
             </section>
 
@@ -88,22 +120,41 @@
                     <div class="settings-group">
                         <label for="setting-domain">AnimePahe Domain</label>
                         <input type="text" id="setting-domain" placeholder="https://animepahe.pw">
-                        <small>Custom mirror/domain since AnimePahe changes them frequently</small>
                     </div>
 
                     <div class="settings-group">
                         <label for="setting-ua">User-Agent</label>
                         <textarea id="setting-ua" rows="2" placeholder="Mozilla/5.0..."></textarea>
-                        <small>Must match the browser User-Agent used to get clearance cookies</small>
+                    </div>
+
+                    <div class="settings-row">
+                        <div class="settings-group">
+                            <label for="setting-browser">Browser Type</label>
+                            <select id="setting-browser" class="compact-select">
+                                <option value="auto">Auto</option>
+                                <option value="chrome">Chrome</option>
+                                <option value="brave">Brave</option>
+                                <option value="edge">Edge</option>
+                                <option value="chromium">Chromium</option>
+                                <option value="vivaldi">Vivaldi</option>
+                                <option value="opera">Opera</option>
+                            </select>
+                        </div>
+                        <div class="settings-group half flex-grow">
+                            <label for="setting-browser-path">Browser Location</label>
+                            <div class="directory-input-row">
+                                <input type="text" id="setting-browser-path" placeholder="Executable location..." readonly>
+                                <button type="button" class="btn-primary" id="btn-browse-browser-path">Browse</button>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="settings-group">
-                        <label for="setting-cf">Cloudflare Clearance Cookie (cf_clearance)</label>
+                        <label for="setting-cf">Cookie</label>
                         <div class="directory-input-row">
                             <input type="text" id="setting-cf" placeholder="e.g. 1a2b3c4d5e...">
-                            <button type="button" class="btn-primary" id="btn-fetch-cf" style="white-space: nowrap;">Autofill via Chrome</button>
+                            <button type="button" class="btn-primary" id="btn-fetch-cf" style="white-space: nowrap;">Autofill Cookie</button>
                         </div>
-                        <small>Clearance cookie value to bypass Cloudflare protection layers (or click Autofill to solve/fetch from Chrome)</small>
                     </div>
 
                     <div class="settings-group">
@@ -111,13 +162,14 @@
                         <div class="directory-input-row">
                             <input type="text" id="setting-dir" placeholder="Select a folder..." readonly>
                             <button type="button" class="btn-primary" id="btn-browse-dir">Browse</button>
+                            <button type="button" class="btn-secondary" id="btn-open-dir-settings">Open Folder</button>
                         </div>
                     </div>
 
                     <div class="settings-row">
                         <div class="settings-group half">
                             <label for="setting-quality">Preferred Quality</label>
-                            <select id="setting-quality">
+                            <select id="setting-quality" class="compact-select">
                                 <option value="1080">1080p</option>
                                 <option value="720">720p</option>
                                 <option value="480">480p</option>
@@ -126,7 +178,7 @@
                         </div>
                         <div class="settings-group half">
                             <label for="setting-audio">Preferred Language</label>
-                            <select id="setting-audio">
+                            <select id="setting-audio" class="compact-select">
                                 <option value="jpn">Subbed (Japanese)</option>
                                 <option value="eng">Dubbed (English)</option>
                             </select>
@@ -145,6 +197,52 @@
                         </select>
                     </div>
 
+                    <div class="settings-group">
+                        <label for="setting-theme">Application Theme</label>
+                        <select id="setting-theme">
+                            <option value="glow">Cyberpunk Glow</option>
+                            <option value="solid">Midnight Solid</option>
+                        </select>
+                    </div>
+
+                    <div class="settings-group">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="setting-hls-transcode">
+                            <span>Full Video Transcode (Slower, re-encodes video to fix broken or freezing frames)</span>
+                        </label>
+                    </div>
+
+                    <div class="settings-group">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="setting-minimize-tray">
+                            <span>Minimize to Windows System Tray on Close</span>
+                        </label>
+                    </div>
+
+                    <div class="settings-group">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="setting-bg-monitor">
+                            <span>Enable Background Monitor for Airing Anime</span>
+                        </label>
+                    </div>
+
+                    <div class="settings-group">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="setting-auto-download-tracked">
+                            <span>Automatically Download New Episodes When Airing</span>
+                        </label>
+                    </div>
+
+                    <div class="settings-row">
+                        <div class="settings-group half">
+                            <label for="setting-poll-interval">Background Check Frequency</label>
+                            <select id="setting-poll-interval" class="compact-select">
+                                <option value="15">Every 15 minutes</option>
+                                <option value="30">Every 30 minutes</option>
+                                <option value="60">Every 1 hour</option>
+                                <option value="120">Every 2 hours</option>
+                            </select>
+                        </div>
                     </div>
 
                     <!-- Streaming Server Settings -->
@@ -175,13 +273,6 @@
                         </div>
                     </div>
 
-                    <div class="settings-group">
-                        <label class="checkbox-container">
-                            <input type="checkbox" id="setting-hls-transcode">
-                            <span>Transcode HLS Streams (Slower, fixes video freezing/skipping issues)</span>
-                        </label>
-                    </div>
-
                     <div class="form-actions">
                         <button type="submit" class="btn-primary" id="save-settings-btn">Save Changes</button>
                         <span id="save-status" class="save-status-msg"></span>
@@ -206,7 +297,14 @@
             </div>
             
             <div class="modal-actions-row">
-                <button class="btn-secondary btn-sm" id="modal-select-all">Select All</button>
+                <button class="btn-secondary btn-sm" id="modal-track-btn">🔔 Track Anime</button>
+                <div class="episode-range-picker">
+                    <span class="range-label">From</span>
+                    <input type="number" id="modal-range-from" class="range-input" placeholder="1" min="1">
+                    <span class="range-separator">-</span>
+                    <span class="range-label">To</span>
+                    <input type="number" id="modal-range-to" class="range-input" placeholder="1" min="1">
+                </div>
                 <button class="btn-secondary btn-sm" id="modal-select-none">Clear Selection</button>
             </div>
 

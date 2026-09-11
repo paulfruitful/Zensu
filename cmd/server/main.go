@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"zensu/internal/api"
-	"zensu/internal/chrome"
+	"zensu/internal/browser"
 	"zensu/internal/config"
 	"zensu/internal/kwik"
 	"zensu/internal/logger"
@@ -111,9 +111,9 @@ func main() {
 }
 
 func refreshCredentials(cfg *config.Config) error {
-	fmt.Println("  \033[33m[INFO]\033[0m Launching Chrome to solve Cloudflare challenge...")
+	fmt.Println("  \033[33m[INFO]\033[0m Launching browser to solve Cloudflare challenge...")
 	fmt.Println("         (Please click/solve any verification challenge if prompted)")
-	credentials, err := chrome.FetchCredentials(cfg.Domain)
+	credentials, err := browser.FetchCredentials(cfg.Domain, cfg.Browser, cfg.BrowserPath, cfg.CF)
 	if err != nil {
 		return err
 	}

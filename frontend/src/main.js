@@ -7,15 +7,24 @@ import {
     SaveConfig, 
     StartDownload, 
     GetProgress, 
-    ClearProgress,
-    GetPosterBase64,
-    IsOnline,
-    RetryFailed,
-    CancelAnimeDownloads,
-    FetchCredentialsFromChrome,
+    ClearProgress, 
+    GetPosterBase64, 
+    IsOnline, 
+    RetryFailed, 
+    CancelAnimeDownloads, 
+    FetchCredentialsFromBrowser,
+    GetDetectedBrowsers,
+    SelectBrowserFile,
     StartStreamingServer,
     StopStreamingServer,
-    GetServerStatus
+    GetServerStatus,
+    GetAnimeMetadata,
+    GetTrackedAnime,
+    IsAnimeTracked,
+    ToggleTrackAnime,
+    BatchTrackAnime,
+    CheckTrackedUpdatesNow,
+    OpenDownloadFolder
 } from '../wailsjs/go/main/App';
 
 function applyTheme(theme) {
@@ -35,6 +44,8 @@ applyTheme(initialTheme);
 // State variables
 let currentAnimeTitle = '';
 let currentAnimeSlug = '';
+let currentAnimePoster = '';
+let currentAnimeProvider = 'animepahe';
 let episodeList = [];
 const cancelledGroups = new Set();
 
@@ -42,15 +53,18 @@ const cancelledGroups = new Set();
 const tabs = {
     search: document.getElementById('tab-search'),
     downloads: document.getElementById('tab-downloads'),
+    tracked: document.getElementById('tab-tracked'),
     settings: document.getElementById('tab-settings')
 };
 
 const panels = {
     search: document.getElementById('panel-search'),
     downloads: document.getElementById('panel-downloads'),
+    tracked: document.getElementById('panel-tracked'),
     settings: document.getElementById('panel-settings')
 };
 
+const providerBtns = document.querySelectorAll('.provider-btn');
 const searchInput = document.getElementById('search-input');
 const searchBtn = document.getElementById('search-btn');
 const searchStatus = document.getElementById('search-status');
@@ -58,6 +72,10 @@ const searchResults = document.getElementById('search-results');
 
 const downloadsList = document.getElementById('downloads-list');
 const downloadBadge = document.getElementById('download-badge');
+
+const trackedResults = document.getElementById('tracked-results');
+const trackedBadge = document.getElementById('tracked-badge');
+const btnCheckUpdates = document.getElementById('btn-check-updates');
 
 const settingsForm = document.getElementById('settings-form');
 const settingsDomain = document.getElementById('setting-domain');
@@ -67,12 +85,21 @@ const settingsDir = document.getElementById('setting-dir');
 const settingsQuality = document.getElementById('setting-quality');
 const settingsAudio = document.getElementById('setting-audio');
 const settingsParallel = document.getElementById('setting-parallel');
+const settingsBrowser = document.getElementById('setting-browser');
+const settingsBrowserPath = document.getElementById('setting-browser-path');
 const settingsTheme = document.getElementById('setting-theme');
 const settingsHlsTranscode = document.getElementById('setting-hls-transcode');
+const settingsMinimizeTray = document.getElementById('setting-minimize-tray');
+const settingsBgMonitor = document.getElementById('setting-bg-monitor');
+const settingsAutoDownloadTracked = document.getElementById('setting-auto-download-tracked');
+const settingsPollInterval = document.getElementById('setting-poll-interval');
 const saveSettingsBtn = document.getElementById('save-settings-btn');
 const btnBrowseDir = document.getElementById('btn-browse-dir');
+const btnBrowseBrowserPath = document.getElementById('btn-browse-browser-path');
 const btnFetchCf = document.getElementById('btn-fetch-cf');
 const btnClearDownloads = document.getElementById('btn-clear-downloads');
+const btnOpenDownloadDir = document.getElementById('btn-open-download-dir');
+const btnOpenDirSettings = document.getElementById('btn-open-dir-settings');
 const saveStatus = document.getElementById('save-status');
 
 const settingsServerPort = document.getElementById('setting-server-port');
@@ -88,8 +115,13 @@ const modalEpisodesList = document.getElementById('modal-episodes-list');
 const modalCloseBtn = document.getElementById('modal-close-btn');
 const modalCancelBtn = document.getElementById('modal-cancel-btn');
 const modalDownloadBtn = document.getElementById('modal-download-btn');
-const modalSelectAll = document.getElementById('modal-select-all');
+const modalTrackBtn = document.getElementById('modal-track-btn');
 const modalSelectNone = document.getElementById('modal-select-none');
+const modalRangeFrom = document.getElementById('modal-range-from');
+const modalRangeTo = document.getElementById('modal-range-to');
+const btnTrackAll = document.getElementById('btn-track-all');
+
+let currentSearchResults = [];
 
 // ----------------------------------------------------
 // Tab Switching
@@ -108,6 +140,12 @@ function switchTab(tabName) {
 
 tabs.search.addEventListener('click', () => switchTab('search'));
 tabs.downloads.addEventListener('click', () => switchTab('downloads'));
+if (tabs.tracked) {
+    tabs.tracked.addEventListener('click', () => {
+        switchTab('tracked');
+        refreshTrackedAnimeList();
+    });
+}
 tabs.settings.addEventListener('click', () => switchTab('settings'));
 
 // ----------------------------------------------------
@@ -119,11 +157,42 @@ async function loadSettings() {
         settingsDomain.value = cfg.domain || 'https://animepahe.pw';
         settingsUa.value = cfg.ua || '';
         settingsCf.value = cfg.cf || '';
+        setProvider(cfg.provider || 'animepahe', false);
+        // Dynamically load only detected browsers
+        try {
+            const detected = await GetDetectedBrowsers();
+            settingsBrowser.innerHTML = '';
+            let hasSaved = false;
+            detected.forEach(b => {
+                if (b.id === cfg.browser) {
+                    hasSaved = true;
+                }
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.name;
+                settingsBrowser.appendChild(opt);
+            });
+            if (!hasSaved && cfg.browser) {
+                const opt = document.createElement('option');
+                opt.value = cfg.browser;
+                opt.textContent = cfg.browser.charAt(0).toUpperCase() + cfg.browser.slice(1) + " (Not Detected)";
+                settingsBrowser.appendChild(opt);
+            }
+        } catch (err) {
+            console.error('Failed to get detected browsers:', err);
+        }
+
+        settingsBrowser.value = cfg.browser || 'auto';
+        settingsBrowserPath.value = cfg.browserPath || '';
         settingsDir.value = cfg.downloadDir || '';
         settingsQuality.value = cfg.quality || '1080';
         settingsAudio.value = cfg.audio || 'jpn';
         settingsParallel.value = String(cfg.maxParallel || 3);
-        settingsHlsTranscode.checked = cfg.hlsTranscode || false;
+        if (settingsHlsTranscode) settingsHlsTranscode.checked = cfg.hlsTranscode || false;
+        if (settingsMinimizeTray) settingsMinimizeTray.checked = cfg.minimizeToTray !== false;
+        if (settingsBgMonitor) settingsBgMonitor.checked = cfg.enableBackgroundMonitor !== false;
+        if (settingsAutoDownloadTracked) settingsAutoDownloadTracked.checked = cfg.autoDownloadTracked !== false;
+        if (settingsPollInterval) settingsPollInterval.value = String(cfg.pollIntervalMinutes || 30);
         settingsTheme.value = localStorage.getItem('theme') || 'glow';
         settingsServerPort.value = String(cfg.serverPort || 8080);
         settingsServerAutostart.checked = !!cfg.serverAutoStart;
@@ -191,12 +260,23 @@ btnBrowseDir.addEventListener('click', async () => {
     }
 });
 
+btnBrowseBrowserPath.addEventListener('click', async () => {
+    try {
+        const path = await SelectBrowserFile();
+        if (path) {
+            settingsBrowserPath.value = path;
+        }
+    } catch (err) {
+        console.error('Browser file selection failed:', err);
+    }
+});
+
 btnFetchCf.addEventListener('click', async () => {
     btnFetchCf.disabled = true;
     const originalText = btnFetchCf.textContent;
-    btnFetchCf.textContent = 'Opening Chrome...';
+    btnFetchCf.textContent = 'Opening Browser...';
     try {
-        const result = await FetchCredentialsFromChrome();
+        const result = await FetchCredentialsFromBrowser();
         if (result && result.ua && result.cf) {
             settingsUa.value = result.ua;
             settingsCf.value = result.cf;
@@ -233,10 +313,17 @@ settingsForm.addEventListener('submit', async (e) => {
             settingsQuality.value,
             settingsAudio.value,
             settingsDomain.value.trim(),
+            settingsBrowser.value,
+            settingsBrowserPath.value.trim(),
             parseInt(settingsParallel.value, 10),
             parseInt(settingsServerPort.value, 10) || 8080,
             settingsServerAutostart.checked,
-            settingsHlsTranscode.checked
+            settingsHlsTranscode.checked,
+            settingsMinimizeTray ? settingsMinimizeTray.checked : true,
+            settingsBgMonitor ? settingsBgMonitor.checked : true,
+            settingsAutoDownloadTracked ? settingsAutoDownloadTracked.checked : true,
+            parseInt(settingsPollInterval.value, 10) || 30,
+            currentAnimeProvider || 'animepahe'
         );
         saveStatus.classList.add('success');
         saveStatus.textContent = 'Settings saved successfully!';
@@ -253,6 +340,35 @@ settingsForm.addEventListener('submit', async (e) => {
     }
 });
 
+// Provider Selection Handling
+function setProvider(provider, clearResults = true) {
+    const p = (provider || 'animepahe').toLowerCase();
+    currentAnimeProvider = p;
+    providerBtns.forEach(btn => {
+        if (btn.dataset.provider === p) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+
+    if (clearResults) {
+        searchResults.innerHTML = '';
+        searchStatus.textContent = '';
+        currentSearchResults = [];
+        if (btnTrackAll) btnTrackAll.style.display = 'none';
+    }
+}
+
+providerBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const selected = btn.dataset.provider;
+        if (selected !== currentAnimeProvider) {
+            setProvider(selected, true);
+        }
+    });
+});
+
 // ----------------------------------------------------
 // Search Handling
 // ----------------------------------------------------
@@ -260,32 +376,43 @@ async function performSearch() {
     const q = searchInput.value.trim();
     if (!q) return;
 
-    searchStatus.textContent = 'Searching...';
+    const provider = currentAnimeProvider || 'animepahe';
+    currentAnimeProvider = provider;
+
+    searchStatus.textContent = `Searching ${provider === 'anikoto' ? 'Anikoto TV' : 'AnimePahe'}...`;
     searchResults.innerHTML = '';
+    if (btnTrackAll) btnTrackAll.style.display = 'none';
+    currentSearchResults = [];
     
     try {
-        const results = await SearchAnime(q);
-        searchStatus.textContent = `Found ${results.length} result(s)`;
+        const results = await SearchAnime(q, provider);
+        currentSearchResults = results || [];
+        searchStatus.textContent = `Found ${results.length} result(s) on ${provider === 'anikoto' ? 'Anikoto TV' : 'AnimePahe'}`;
         
         if (results.length === 0) {
             searchResults.innerHTML = '<div class="no-results">No anime found matching your query.</div>';
             return;
         }
 
+        if (btnTrackAll && results.length > 0) {
+            btnTrackAll.style.display = 'inline-flex';
+        }
+
         results.forEach(async anime => {
             const card = document.createElement('div');
             card.className = 'anime-card';
+            card.title = anime.title;
             card.innerHTML = `
                 <div class="anime-poster-wrapper">
                     <div class="anime-poster-placeholder"></div>
                 </div>
                 <div class="anime-info">
-                    <h3>${anime.title}</h3>
+                    <h3 title="${anime.title}">${anime.title}</h3>
                 </div>
             `;
             
             card.addEventListener('click', () => {
-                openEpisodeModal(anime.title, anime.session, anime.poster);
+                openEpisodeModal(anime.title, anime.session, anime.poster, provider);
             });
             
             searchResults.appendChild(card);
@@ -315,18 +442,208 @@ searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') performSearch();
 });
 
+if (btnTrackAll) {
+    btnTrackAll.addEventListener('click', async () => {
+        if (!currentSearchResults || currentSearchResults.length === 0) return;
+        btnTrackAll.disabled = true;
+        const origText = btnTrackAll.textContent;
+        btnTrackAll.textContent = 'Tracking All...';
+        try {
+            const shows = currentSearchResults.map(item => ({
+                title: item.title,
+                slug: item.session,
+                poster: item.poster,
+                lastDownloadedEp: 0,
+                totalEpisodes: 0,
+                airingStatus: 'RELEASING',
+                autoDownload: true,
+                nextEpisodeNum: 0,
+                nextAiringAt: 0,
+                score: 0,
+                broadcastDay: '',
+                createdAt: '',
+                lastCheckedAt: ''
+            }));
+            const added = await BatchTrackAnime(shows);
+            searchStatus.textContent = `Successfully tracked ${added} new show(s)!`;
+            refreshTrackedAnimeList();
+            btnTrackAll.textContent = '✓ All Tracked';
+            setTimeout(() => {
+                btnTrackAll.disabled = false;
+                btnTrackAll.textContent = origText;
+            }, 3000);
+        } catch (err) {
+            alert(`Batch track failed: ${err}`);
+            btnTrackAll.disabled = false;
+            btnTrackAll.textContent = origText;
+        }
+    });
+}
+
+function formatNextAiring(nextEpNum, nextAiringAt) {
+    if (!nextAiringAt || nextAiringAt <= 0) return '';
+    const now = Math.floor(Date.now() / 1000);
+    const diff = nextAiringAt - now;
+    if (diff <= 0) return '';
+    const days = Math.floor(diff / 86400);
+    const hours = Math.floor((diff % 86400) / 3600);
+    const mins = Math.floor((diff % 3600) / 60);
+    let str = '';
+    if (days > 0) str += `${days}d `;
+    if (hours > 0 || days > 0) str += `${hours}h `;
+    if (days === 0 && mins > 0) str += `${mins}m`;
+    return `Ep ${nextEpNum > 0 ? nextEpNum : ''} in ${str.trim()}`;
+}
+
+async function updateModalTrackBtnState() {
+    if (!modalTrackBtn || !currentAnimeTitle) return;
+    try {
+        const tracked = await IsAnimeTracked(currentAnimeTitle);
+        if (tracked) {
+            modalTrackBtn.innerHTML = '✓ Tracked';
+            modalTrackBtn.style.border = '1px solid #10b981';
+            modalTrackBtn.style.color = '#10b981';
+        } else {
+            modalTrackBtn.innerHTML = '🔔 Track Anime';
+            modalTrackBtn.style.border = '';
+            modalTrackBtn.style.color = '';
+        }
+    } catch (err) {
+        console.error('Failed to check tracking state:', err);
+    }
+}
+
+async function refreshTrackedAnimeList() {
+    if (!trackedResults) return;
+    try {
+        const trackedList = await GetTrackedAnime();
+        if (trackedBadge) {
+            if (trackedList.length > 0) {
+                trackedBadge.textContent = String(trackedList.length);
+                trackedBadge.style.display = 'inline-block';
+            } else {
+                trackedBadge.style.display = 'none';
+            }
+        }
+
+        trackedResults.innerHTML = '';
+        if (trackedList.length === 0) {
+            trackedResults.innerHTML = '<div class="no-results" style="grid-column: 1 / -1;">No tracked anime subscriptions yet. Click 🔔 Track Anime on any search result to subscribe!</div>';
+            return;
+        }
+
+        trackedList.forEach(async item => {
+            const card = document.createElement('div');
+            card.className = 'anime-card tracked-card';
+            const isReleasing = item.airingStatus === 'RELEASING';
+            const countdownStr = formatNextAiring(item.nextEpisodeNum, item.nextAiringAt);
+
+            card.innerHTML = `
+                <div class="anime-poster-wrapper">
+                    <div class="anime-poster-placeholder"></div>
+                    <span class="status-pill ${isReleasing ? 'pill-releasing' : 'pill-finished'}">${isReleasing ? 'AIRING' : 'FINISHED'}</span>
+                </div>
+                <div class="anime-info">
+                    <div class="tracked-title-row">
+                        <h3>${item.title}</h3>
+                        <button class="btn-untrack-inline" title="Untrack ${item.title}">✕</button>
+                    </div>
+                    <div class="tracked-meta">Last Downloaded: E${item.lastDownloadedEp > 0 ? item.lastDownloadedEp : '--'}</div>
+                    ${countdownStr ? `<div class="tracked-countdown">⏳ ${countdownStr}</div>` : ''}
+                    ${item.score > 0 ? `<div class="tracked-score">⭐ MAL Rating: ${item.score.toFixed(1)}</div>` : ''}
+                </div>
+            `;
+
+            card.addEventListener('click', () => {
+                openEpisodeModal(item.title, item.slug, item.poster);
+            });
+
+            const untrackBtn = card.querySelector('.btn-untrack-inline');
+            if (untrackBtn) {
+                untrackBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    try {
+                        await ToggleTrackAnime(item.title, item.slug, item.poster);
+                        refreshTrackedAnimeList();
+                    } catch (err) {
+                        alert(`Failed to untrack: ${err}`);
+                    }
+                });
+            }
+
+            trackedResults.appendChild(card);
+
+            if (item.poster) {
+                try {
+                    const base64Data = await GetPosterBase64(item.poster);
+                    if (base64Data) {
+                        const wrapper = card.querySelector('.anime-poster-wrapper');
+                        if (wrapper) {
+                            wrapper.innerHTML = `
+                                <img src="data:image/webp;base64,${base64Data}" class="anime-poster" alt="poster" />
+                                <span class="status-pill ${isReleasing ? 'pill-releasing' : 'pill-finished'}">${isReleasing ? 'AIRING' : 'FINISHED'}</span>
+                            `;
+                        }
+                    }
+                } catch (err) {
+                    console.error('Failed to load poster base64:', err);
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Failed to refresh tracked anime:', err);
+    }
+}
+
+if (btnCheckUpdates) {
+    btnCheckUpdates.addEventListener('click', async () => {
+        btnCheckUpdates.disabled = true;
+        const origText = btnCheckUpdates.textContent;
+        btnCheckUpdates.textContent = 'Checking...';
+        try {
+            await CheckTrackedUpdatesNow();
+            setTimeout(() => {
+                refreshTrackedAnimeList();
+                btnCheckUpdates.disabled = false;
+                btnCheckUpdates.textContent = origText;
+            }, 2000);
+        } catch (err) {
+            alert(`Check failed: ${err}`);
+            btnCheckUpdates.disabled = false;
+            btnCheckUpdates.textContent = origText;
+        }
+    });
+}
+
+if (modalTrackBtn) {
+    modalTrackBtn.addEventListener('click', async () => {
+        if (!currentAnimeTitle) return;
+        try {
+            const isTracked = await ToggleTrackAnime(currentAnimeTitle, currentAnimeSlug, currentAnimePoster);
+            updateModalTrackBtnState();
+            refreshTrackedAnimeList();
+        } catch (err) {
+            alert(`Failed to toggle tracking: ${err}`);
+        }
+    });
+}
+
 // ----------------------------------------------------
 // Episode Selection Modal
 // ----------------------------------------------------
-async function openEpisodeModal(title, slug, posterURL) {
+async function openEpisodeModal(title, slug, posterURL, provider) {
     currentAnimeTitle = title;
     currentAnimeSlug = slug;
+    currentAnimePoster = posterURL || '';
+    if (provider) currentAnimeProvider = provider;
     modalDownloadBtn.disabled = true;
     
     modalAnimeTitle.textContent = title;
     modalStatusText.textContent = 'Loading episodes list...';
     modalStatusText.style.color = 'var(--text-secondary)';
     modalEpisodesList.innerHTML = '<div style="grid-column: span 4; text-align: center; color: var(--text-secondary);">Loading episodes list...</div>';
+    
+    updateModalTrackBtnState();
     
     // Handle modal header poster dynamically
     modalPosterWrapper.innerHTML = '';
@@ -353,7 +670,7 @@ async function openEpisodeModal(title, slug, posterURL) {
 
     try {
         const [eps, progressList] = await Promise.all([
-            GetEpisodes(title, slug),
+            GetEpisodes(title, slug, currentAnimeProvider),
             GetProgress()
         ]);
         
@@ -363,8 +680,22 @@ async function openEpisodeModal(title, slug, posterURL) {
         if (eps.length === 0) {
             modalEpisodesList.innerHTML = '<div style="grid-column: span 4; text-align: center; color: var(--text-secondary);">No episodes found.</div>';
             modalStatusText.textContent = 'No episodes found.';
+            modalRangeFrom.value = '';
+            modalRangeTo.value = '';
             return;
         }
+
+        const epNums = eps.map(e => e.episode);
+        const minEp = Math.min(...epNums);
+        const maxEp = Math.max(...epNums);
+        modalRangeFrom.min = minEp;
+        modalRangeFrom.max = maxEp;
+        modalRangeFrom.placeholder = `${minEp}`;
+        modalRangeFrom.value = '';
+        modalRangeTo.min = minEp;
+        modalRangeTo.max = maxEp;
+        modalRangeTo.placeholder = `${maxEp}`;
+        modalRangeTo.value = '';
 
         // Keep track of which episodes are currently active in downloads list (queued, downloading, or done)
         const activeOrCompletedEps = new Set();
@@ -429,13 +760,74 @@ function updateModalDownloadBtnState() {
 modalCloseBtn.addEventListener('click', closeEpisodeModal);
 modalCancelBtn.addEventListener('click', closeEpisodeModal);
 
-modalSelectAll.addEventListener('click', () => {
-    const checkboxes = modalEpisodesList.querySelectorAll('input[type="checkbox"]:not(:disabled)');
-    checkboxes.forEach(cb => cb.checked = true);
+function applyEpisodeRange(changedField) {
+    if (!episodeList || episodeList.length === 0) return;
+    const epNums = episodeList.map(e => e.episode);
+    const minEp = Math.min(...epNums);
+    const maxEp = Math.max(...epNums);
+
+    let rawFrom = modalRangeFrom.value !== '' ? parseFloat(modalRangeFrom.value) : null;
+    let rawTo = modalRangeTo.value !== '' ? parseFloat(modalRangeTo.value) : null;
+
+    if (rawFrom !== null) {
+        if (rawFrom > maxEp) {
+            rawFrom = maxEp;
+            modalRangeFrom.value = maxEp;
+        }
+        if (rawFrom < minEp) {
+            rawFrom = minEp;
+            modalRangeFrom.value = minEp;
+        }
+    }
+
+    if (rawTo !== null) {
+        if (rawTo > maxEp) {
+            rawTo = maxEp;
+            modalRangeTo.value = maxEp;
+        }
+        if (rawTo < minEp) {
+            rawTo = minEp;
+            modalRangeTo.value = minEp;
+        }
+    }
+
+    if (rawFrom !== null && rawTo !== null) {
+        if (changedField === 'from' && rawFrom > rawTo) {
+            rawTo = rawFrom;
+            modalRangeTo.value = rawFrom;
+        } else if (changedField === 'to' && rawTo < rawFrom) {
+            rawFrom = rawTo;
+            modalRangeFrom.value = rawTo;
+        }
+    }
+
+    if (rawFrom === null && rawTo === null) return;
+
+    const fromVal = rawFrom !== null ? rawFrom : minEp;
+    const toVal = rawTo !== null ? rawTo : maxEp;
+
+    const checkboxes = modalEpisodesList.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(cb => {
+        const epNum = parseFloat(cb.value);
+        if (epNum >= fromVal && epNum <= toVal) {
+            if (!cb.disabled) {
+                cb.checked = true;
+            }
+        } else {
+            cb.checked = false;
+        }
+    });
+
     updateModalDownloadBtnState();
-});
+}
+
+modalRangeFrom.addEventListener('input', () => applyEpisodeRange('from'));
+modalRangeTo.addEventListener('input', () => applyEpisodeRange('to'));
+
 
 modalSelectNone.addEventListener('click', () => {
+    modalRangeFrom.value = '';
+    modalRangeTo.value = '';
     const checkboxes = modalEpisodesList.querySelectorAll('input[type="checkbox"]');
     checkboxes.forEach(cb => cb.checked = false);
     updateModalDownloadBtnState();
@@ -454,7 +846,7 @@ modalDownloadBtn.addEventListener('click', async () => {
     const epNums = Array.from(checkboxes).map(cb => parseFloat(cb.value));
     
     try {
-        await StartDownload(currentAnimeTitle, currentAnimeSlug, epNums);
+        await StartDownload(currentAnimeTitle, currentAnimeSlug, currentAnimeProvider, epNums);
         closeEpisodeModal();
         switchTab('downloads');
     } catch (err) {
@@ -810,8 +1202,29 @@ if (btnClearDownloads) {
     });
 }
 
+if (btnOpenDownloadDir) {
+    btnOpenDownloadDir.addEventListener('click', async () => {
+        try {
+            await OpenDownloadFolder();
+        } catch (err) {
+            console.error('Failed to open download folder:', err);
+        }
+    });
+}
+
+if (btnOpenDirSettings) {
+    btnOpenDirSettings.addEventListener('click', async () => {
+        try {
+            await OpenDownloadFolder();
+        } catch (err) {
+            console.error('Failed to open download folder:', err);
+        }
+    });
+}
+
 // Initialization
 loadSettings();
+refreshTrackedAnimeList();
 updateDownloadsProgress();
 setInterval(updateDownloadsProgress, 1000);
 

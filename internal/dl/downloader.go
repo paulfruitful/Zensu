@@ -32,6 +32,18 @@ type Job struct {
 	IsHLS        bool
 	OutputPath   string
 	HlsTranscode bool
+	Referer      string
+}
+
+func (j *Job) GetReferer() string {
+	if j.Referer != "" {
+		return j.Referer
+	}
+	uLower := strings.ToLower(j.URL)
+	if strings.Contains(uLower, "mewstream") || strings.Contains(uLower, "cloudvideo") || strings.Contains(uLower, "megaplay") || strings.Contains(uLower, "anikoto") || strings.Contains(uLower, "lostproject") {
+		return "https://megaplay.buzz/"
+	}
+	return "https://kwik.cx/"
 }
 
 type Result struct {
@@ -129,7 +141,6 @@ func (m *Manager) seedCookies(rawURL string) {
 	}
 	m.client.SetCookies(u, fCookies)
 }
-
 
 func (m *Manager) StartWorkers() {
 	for i := 0; i < m.maxParallel; i++ {
@@ -550,12 +561,43 @@ func (m *Manager) downloadDirect(ctx context.Context, job Job) error {
 	return os.Rename(tmpPath, job.OutputPath)
 }
 
-func (m *Manager) fetchM3U8Content(ctx context.Context, playlistURL string, ua string) (string, error) {
+func selectMasterVariant(basePlaylistURL, content string) string {
+	base, err := url.Parse(basePlaylistURL)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#EXT-X-STREAM-INF:") {
+			for j := i + 1; j < len(lines); j++ {
+				next := strings.TrimSpace(lines[j])
+				if next != "" && !strings.HasPrefix(next, "#") {
+					if u, err := url.Parse(next); err == nil {
+						return base.ResolveReference(u).String()
+					}
+					break
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func (m *Manager) fetchM3U8Content(ctx context.Context, playlistURL string, ua string, referer string) (string, error) {
 	req, err := fhttp.NewRequestWithContext(ctx, "GET", playlistURL, nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Referer", "https://kwik.cx/")
+	if referer == "" {
+		uLower := strings.ToLower(playlistURL)
+		if strings.Contains(uLower, "mewstream") || strings.Contains(uLower, "cloudvideo") || strings.Contains(uLower, "megaplay") || strings.Contains(uLower, "anikoto") || strings.Contains(uLower, "lostproject") || strings.Contains(uLower, "akirax") {
+			referer = "https://megaplay.buzz/"
+		} else {
+			referer = "https://kwik.cx/"
+		}
+	}
+	req.Header.Set("Referer", referer)
 	if ua != "" {
 		req.Header.Set("User-Agent", ua)
 	} else {
@@ -573,7 +615,16 @@ func (m *Manager) fetchM3U8Content(ctx context.Context, playlistURL string, ua s
 	if err != nil {
 		return "", err
 	}
-	return string(bodyBytes), nil
+
+	content := string(bodyBytes)
+	if strings.Contains(content, "#EXT-X-STREAM-INF") {
+		subURL := selectMasterVariant(playlistURL, content)
+		if subURL != "" && subURL != playlistURL {
+			return m.fetchM3U8Content(ctx, subURL, ua, referer)
+		}
+	}
+
+	return content, nil
 }
 
 func parseM3U8(playlistURL string, content string) ([]string, []float64, string, string, error) {
@@ -604,11 +655,9 @@ func parseM3U8(playlistURL string, content string) ([]string, []float64, string,
 					if u, err := url.Parse(kURL); err == nil {
 						keyURL = base.ResolveReference(u).String()
 					}
-					// Replace the original URI with the local one
 					keyLine = line[:start] + "key.key" + line[start+end:]
 				}
 			} else {
-				// Fallback if key exists but URI is missing/different format
 				keyLine = line
 			}
 		} else if strings.HasPrefix(line, "#EXTINF:") {
@@ -635,7 +684,7 @@ func parseM3U8(playlistURL string, content string) ([]string, []float64, string,
 }
 
 func (m *Manager) getM3U8Duration(playlistURL string, ua string) float64 {
-	content, err := m.fetchM3U8Content(context.Background(), playlistURL, ua)
+	content, err := m.fetchM3U8Content(context.Background(), playlistURL, ua, "")
 	if err != nil {
 		return 1440
 	}
@@ -684,7 +733,7 @@ func (m *Manager) downloadHLS(ctx context.Context, job Job) error {
 
 	fmt.Printf("\r\033[K  E%02.0f  [HLS] fetching playlist...\n", job.EpNum)
 
-	playlistContent, err := m.fetchM3U8Content(ctx, job.URL, ua)
+	playlistContent, err := m.fetchM3U8Content(ctx, job.URL, ua, job.GetReferer())
 	if err != nil {
 		logger.Errorf("DL_HLS_PLAYLIST_ERR", "Failed to fetch playlist: %v", err)
 		return err
@@ -696,7 +745,6 @@ func (m *Manager) downloadHLS(ctx context.Context, job Job) error {
 		return err
 	}
 
-	// Create a temporary directory for local offline packaging
 	tempDir, err := os.MkdirTemp("", "zensu-hls-*")
 	if err != nil {
 		logger.Errorf("DL_HLS_TEMP_ERR", "Failed to create temp directory: %v", err)
@@ -704,13 +752,12 @@ func (m *Manager) downloadHLS(ctx context.Context, job Job) error {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// 1. Download decryption key if present
 	if keyURL != "" {
 		req, err := fhttp.NewRequestWithContext(ctx, "GET", keyURL, nil)
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Referer", "https://kwik.cx/")
+		req.Header.Set("Referer", job.GetReferer())
 		req.Header.Set("User-Agent", ua)
 
 		resp, err := m.client.Do(req)
@@ -738,8 +785,8 @@ func (m *Manager) downloadHLS(ctx context.Context, job Job) error {
 
 	logger.Infof("DL_HLS_START", "Starting native HLS download of %d segments", len(urls))
 
-	// 2. Download segments locally
 	var totalBytesDownloaded int64
+	var completedSegmentsBytes int64
 	startTime := time.Now()
 	lastPrintTime := time.Now()
 
@@ -749,89 +796,99 @@ func (m *Manager) downloadHLS(ctx context.Context, job Job) error {
 			return ctx.Err()
 		}
 
-		var resp *fhttp.Response
-		var reqErr error
+		segmentPath := filepath.Join(tempDir, fmt.Sprintf("segment_%d.ts", idx))
+		var segmentSuccess bool
+		var lastSegmentErr error
+
 		for retry := 0; retry < 5; retry++ {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+
 			req, err := fhttp.NewRequestWithContext(ctx, "GET", segmentURL, nil)
 			if err != nil {
-				reqErr = err
+				lastSegmentErr = err
 				break
 			}
-			req.Header.Set("Referer", "https://kwik.cx/")
+			req.Header.Set("Referer", job.GetReferer())
 			req.Header.Set("User-Agent", ua)
 
-			resp, err = m.client.Do(req)
-			if err == nil && resp.StatusCode == fhttp.StatusOK {
-				reqErr = nil
+			resp, err := m.client.Do(req)
+			if err != nil {
+				lastSegmentErr = err
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			if resp.StatusCode != fhttp.StatusOK {
+				lastSegmentErr = fmt.Errorf("status %d", resp.StatusCode)
+				resp.Body.Close()
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			segmentFile, err := os.Create(segmentPath)
+			if err != nil {
+				resp.Body.Close()
+				lastSegmentErr = err
 				break
 			}
-			if resp != nil {
-				resp.Body.Close()
-			}
-			if err != nil {
-				reqErr = err
-			} else if resp != nil {
-				reqErr = fmt.Errorf("status %d", resp.StatusCode)
-			} else {
-				reqErr = fmt.Errorf("unknown connection error")
-			}
-			time.Sleep(1 * time.Second)
-		}
-		if reqErr != nil {
-			logger.Errorf("DL_HLS_SEG_ERR", "Failed to download segment %d: %v", idx, reqErr)
-			return fmt.Errorf("failed to download segment %d: %w", idx, reqErr)
-		}
 
-		segmentPath := filepath.Join(tempDir, fmt.Sprintf("segment_%d.ts", idx))
-		segmentFile, err := os.Create(segmentPath)
-		if err != nil {
-			resp.Body.Close()
-			return err
-		}
+			var currentSegmentBytes int64
+			spr := &segmentProgressReader{
+				r: resp.Body,
+				onProgress: func(n int) {
+					atomic.AddInt64(&currentSegmentBytes, int64(n))
+					totalProgressBytes := atomic.LoadInt64(&completedSegmentsBytes) + atomic.LoadInt64(&currentSegmentBytes)
 
-		spr := &segmentProgressReader{
-			r: resp.Body,
-			onProgress: func(n int) {
-				atomic.AddInt64(&totalBytesDownloaded, int64(n))
-
-				now := time.Now()
-				if now.Sub(lastPrintTime) > 250*time.Millisecond {
-					lastPrintTime = now
-					elapsed := time.Since(startTime).Seconds()
-					speed := ""
-					eta := ""
-					if elapsed > 0 {
-						bps := float64(atomic.LoadInt64(&totalBytesDownloaded)) / elapsed
-						speed = humanBytes(int64(bps)) + "/s"
-						if idx > 0 {
-							remainingSec := float64(len(urls)-idx) * elapsed / float64(idx)
-							if remainingSec < 60 {
-								eta = fmt.Sprintf("%.0fs", remainingSec)
-							} else {
-								eta = fmt.Sprintf("%.0fm %.0fs", remainingSec/60, remainingSec-float64(int(remainingSec/60)*60))
+					now := time.Now()
+					if now.Sub(lastPrintTime) > 250*time.Millisecond {
+						lastPrintTime = now
+						elapsed := time.Since(startTime).Seconds()
+						speed := ""
+						eta := ""
+						if elapsed > 0 {
+							bps := float64(totalProgressBytes) / elapsed
+							speed = humanBytes(int64(bps)) + "/s"
+							if idx > 0 {
+								remainingSec := float64(len(urls)-idx) * elapsed / float64(idx)
+								if remainingSec < 60 {
+									eta = fmt.Sprintf("%.0fs", remainingSec)
+								} else {
+									eta = fmt.Sprintf("%.0fm %.0fs", remainingSec/60, remainingSec-float64(int(remainingSec/60)*60))
+								}
 							}
 						}
-					}
 
-					pct := (float64(idx) / float64(len(urls))) * 100.0
-					if pct > 100 {
-						pct = 100
+						pct := (float64(idx) / float64(len(urls))) * 100.0
+						if pct > 100 {
+							pct = 100
+						}
+						m.UpdateProgress(job.ID, job.AnimeTitle, job.EpNum, "downloading", pct, speed, eta, "")
+						printProgress(job.EpNum, totalProgressBytes, 0, false)
 					}
-					m.UpdateProgress(job.ID, job.AnimeTitle, job.EpNum, "downloading", pct, speed, eta, "")
-					printProgress(job.EpNum, atomic.LoadInt64(&totalBytesDownloaded), 0, false)
-				}
-			},
+				},
+			}
+
+			_, copyErr := io.Copy(segmentFile, spr)
+			resp.Body.Close()
+			segmentFile.Close()
+
+			if copyErr != nil {
+				lastSegmentErr = copyErr
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			atomic.AddInt64(&completedSegmentsBytes, currentSegmentBytes)
+			atomic.StoreInt64(&totalBytesDownloaded, atomic.LoadInt64(&completedSegmentsBytes))
+			segmentSuccess = true
+			break
 		}
 
-		_, err = io.Copy(segmentFile, spr)
-		resp.Body.Close()
-		segmentFile.Close()
-		if err != nil {
-			logger.Errorf("DL_HLS_COPY_ERR", "Failed copying segment %d data: %v", idx, err)
-			return fmt.Errorf("failed copying segment %d data: %w", idx, err)
+		if !segmentSuccess {
+			logger.Errorf("DL_HLS_SEG_ERR", "Failed to download segment %d: %v", idx, lastSegmentErr)
+			return fmt.Errorf("failed to download segment %d: %w", idx, lastSegmentErr)
 		}
 	}
 
@@ -881,13 +938,22 @@ func (m *Manager) downloadHLS(ctx context.Context, job Job) error {
 	}
 
 	var ffmpegArgs []string
-	ffmpegArgs = append(ffmpegArgs, "-allowed_extensions", "ALL", "-protocol_whitelist", "file,crypto", "-i", "playlist.m3u8")
+	ffmpegArgs = append(ffmpegArgs,
+		"-allowed_extensions", "ALL",
+		"-protocol_whitelist", "file,crypto",
+		"-fflags", "+genpts",
+		"-i", "playlist.m3u8",
+	)
 	if job.HlsTranscode {
-		ffmpegArgs = append(ffmpegArgs, "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p")
+		ffmpegArgs = append(ffmpegArgs, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac")
 	} else {
-		ffmpegArgs = append(ffmpegArgs, "-c", "copy")
+		ffmpegArgs = append(ffmpegArgs, "-c:v", "copy", "-c:a", "aac")
 	}
-	ffmpegArgs = append(ffmpegArgs, "-y", job.OutputPath)
+	ffmpegArgs = append(ffmpegArgs,
+		"-bsf:a", "aac_adtstoasc",
+		"-max_muxing_queue_size", "2048",
+		"-y", job.OutputPath,
+	)
 
 	cmd := exec.CommandContext(ctx, ffmpegPath, ffmpegArgs...)
 	cmd.Dir = tempDir
