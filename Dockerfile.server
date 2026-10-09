@@ -1,0 +1,57 @@
+# Stage 1: Build Linux server binary
+FROM golang:1.23-bookworm AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /app/zensu-server ./cmd/server
+
+# Stage 2: Runtime environment with real Google Chrome & Xvfb
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DOCKER=1
+ENV CONTAINER=1
+
+# Install base dependencies, Xvfb, VNC, and fonts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    curl \
+    gnupg \
+    ca-certificates \
+    xvfb \
+    x11vnc \
+    novnc \
+    websockify \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install official Google Chrome Stable
+RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg && \
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends google-chrome-stable && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy compiled binary and entrypoint script
+COPY --from=builder /app/zensu-server /app/zensu-server
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh /app/zensu-server
+
+# Persistence volumes
+VOLUME ["/root/.config/zensu", "/root/Downloads"]
+
+# 8080: Zensu HTTP Streaming Server
+# 6080: noVNC Web Interface for remote browser visual inspection / captcha
+EXPOSE 8080 6080
+
+ENTRYPOINT ["/docker-entrypoint.sh"]

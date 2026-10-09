@@ -1,0 +1,19 @@
+services:
+  zensu-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: zensu-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080" # Zensu HTTP Streaming Server API
+      - "6080:6080" # noVNC Web Interface (for visual check & manual Cloudflare clicks if needed)
+    environment:
+      - ENABLE_VNC=true
+      # Set a password for VNC if your VPS ports are publicly exposed:
+      # - VNC_PASSWORD=my_secure_vnc_password
+    volumes:
+      - ./data:/root/.config/zensu
+      - ./downloads:/root/Downloads
+    # Allocate shared memory so Chrome never crashes on heavy tabs
+    shm_size: "2gb"

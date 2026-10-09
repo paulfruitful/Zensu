@@ -218,15 +218,24 @@ func FindCandidatePath(browserType string) (string, error) {
 }
 
 func getLaunchArgs(browserPath string, port int, profileDir string, targetURL string) []string {
-	return []string{
+	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		"--remote-debugging-address=127.0.0.1",
 		fmt.Sprintf("--user-data-dir=%s", profileDir),
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-blink-features=AutomationControlled",
-		targetURL,
 	}
+
+	if runtime.GOOS != "windows" {
+		args = append(args, "--disable-dev-shm-usage")
+		if os.Geteuid() == 0 || os.Getenv("CONTAINER") != "" || os.Getenv("DOCKER") != "" {
+			args = append(args, "--no-sandbox")
+		}
+	}
+
+	args = append(args, targetURL)
+	return args
 }
 
 func launchBrowser(browserPath string, port int, profileDir string, targetURL string) (*exec.Cmd, error) {
