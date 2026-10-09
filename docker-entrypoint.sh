@@ -38,8 +38,9 @@ if [ "${ENABLE_VNC:-true}" = "true" ]; then
         x11vnc -display "${DISPLAY}" -forever -shared -nopw -rfbport 5900 -bg 2>/dev/null
     fi
 
-    echo "[INFO] Starting noVNC web interface on port 6080..."
-    /usr/share/novnc/utils/novnc_proxy --vnc localhost:5900 --listen 6080 > /dev/null 2>&1 &
+    echo "[INFO] Starting noVNC (websockify) on port 6080..."
+    websockify --web /usr/share/novnc 6080 localhost:5900 &
+    WEBSOCKIFY_PID=$!
     echo "[INFO] noVNC is accessible at http://<VPS_IP>:6080/vnc.html"
 fi
 
@@ -48,6 +49,7 @@ cleanup() {
     echo "[INFO] Shutting down container services..."
     kill -TERM "$SERVER_PID" 2>/dev/null || true
     kill -TERM "$XVFB_PID" 2>/dev/null || true
+    kill -TERM "$WEBSOCKIFY_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
     exit 0
 }
