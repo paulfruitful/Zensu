@@ -218,6 +218,7 @@ func FindCandidatePath(browserType string) (string, error) {
 }
 
 func getLaunchArgs(browserPath string, port int, profileDir string, targetURL string) []string {
+	defaultUA := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		"--remote-debugging-address=127.0.0.1",
@@ -225,6 +226,10 @@ func getLaunchArgs(browserPath string, port int, profileDir string, targetURL st
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-blink-features=AutomationControlled",
+		fmt.Sprintf("--user-agent=%s", defaultUA),
+		"--window-size=1920,1080",
+		"--lang=en-US,en",
+		"--disable-infobars",
 	}
 
 	if runtime.GOOS != "windows" {
@@ -398,12 +403,45 @@ func getPageTitle(conn *websocket.Conn) (string, error) {
 	return result.Result.Value, nil
 }
 
+const stealthJS = `(() => {
+	try {
+		Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+		delete navigator.__proto__.webdriver;
+		Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+		Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+
+		const spoofWebGL = (proto) => {
+			if (!proto) return;
+			const orig = proto.getParameter;
+			proto.getParameter = function(p) {
+				if (p === 37445) return 'Google Inc. (NVIDIA)';
+				if (p === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+				return orig.apply(this, arguments);
+			};
+		};
+		if (window.WebGLRenderingContext) spoofWebGL(WebGLRenderingContext.prototype);
+		if (window.WebGL2RenderingContext) spoofWebGL(WebGL2RenderingContext.prototype);
+
+		if (!window.chrome) window.chrome = {};
+		if (!window.chrome.runtime) window.chrome.runtime = {};
+	} catch (e) {}
+})();`
+
+func injectStealth(conn *websocket.Conn) {
+	_, _ = sendAndReceive(conn, "Page.enable", nil, 90)
+	_, _ = sendAndReceive(conn, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": stealthJS}, 91)
+	_, _ = sendAndReceive(conn, "Runtime.evaluate", map[string]any{"expression": stealthJS}, 92)
+	_, _ = sendAndReceive(conn, "Page.reload", map[string]any{"ignoreCache": true}, 93)
+}
+
 func pollCookiesAndUA(wsURL string, domain string, oldCookie string) (*Credentials, error) {
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("websocket dial failed: %w", err)
 	}
 	defer conn.Close()
+
+	injectStealth(conn)
 
 	timeout := time.After(3 * time.Minute)
 	ticker := time.NewTicker(1500 * time.Millisecond)
