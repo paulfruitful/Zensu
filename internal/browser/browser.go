@@ -234,6 +234,10 @@ func getLaunchArgs(browserPath string, port int, profileDir string, targetURL st
 		}
 	}
 
+	if proxy := os.Getenv("PROXY_URL"); proxy != "" {
+		args = append(args, fmt.Sprintf("--proxy-server=%s", proxy))
+	}
+
 	args = append(args, targetURL)
 	return args
 }

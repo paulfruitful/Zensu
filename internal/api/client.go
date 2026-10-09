@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
 
 	http "github.com/bogdanfinn/fhttp"
@@ -27,6 +28,9 @@ func NewClient(ua, cookies, domain string) (*Client, error) {
 		tlsclient.WithTimeoutSeconds(30),
 		tlsclient.WithClientProfile(profiles.Chrome_124),
 		tlsclient.WithCookieJar(jar),
+	}
+	if proxy := os.Getenv("PROXY_URL"); proxy != "" {
+		options = append(options, tlsclient.WithProxyUrl(proxy))
 	}
 
 	inner, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), options...)

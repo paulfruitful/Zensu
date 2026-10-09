@@ -3,6 +3,7 @@ package kwik
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -276,6 +277,9 @@ func (e *Extractor) newClient() (tlsclient.HttpClient, error) {
 		tlsclient.WithClientProfile(profiles.Chrome_124),
 		tlsclient.WithCookieJar(jar),
 		tlsclient.WithNotFollowRedirects(),
+	}
+	if proxy := os.Getenv("PROXY_URL"); proxy != "" {
+		options = append(options, tlsclient.WithProxyUrl(proxy))
 	}
 	return tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), options...)
 }
