@@ -270,11 +270,32 @@ func (e *Extractor) fetchPage(pageURL, referer string) (string, []*http.Cookie, 
 	return buf.String(), respCookies, nil
 }
 
+func detectProfile(ua string) profiles.ClientProfile {
+	uaLower := strings.ToLower(ua)
+	if strings.Contains(uaLower, "iphone") || strings.Contains(uaLower, "ipad") {
+		if strings.Contains(uaLower, "os 18") {
+			return profiles.Safari_IOS_18_0
+		}
+		if strings.Contains(uaLower, "os 17") {
+			return profiles.Safari_IOS_17_0
+		}
+		return profiles.Safari_IOS_16_0
+	}
+	if strings.Contains(uaLower, "safari") && !strings.Contains(uaLower, "chrome") {
+		return profiles.Safari_16_0
+	}
+	if strings.Contains(uaLower, "firefox") {
+		return profiles.Firefox_120
+	}
+	return profiles.Chrome_124
+}
+
 func (e *Extractor) newClient() (tlsclient.HttpClient, error) {
 	jar := tlsclient.NewCookieJar()
+	profile := detectProfile(e.ua)
 	options := []tlsclient.HttpClientOption{
 		tlsclient.WithTimeoutSeconds(30),
-		tlsclient.WithClientProfile(profiles.Chrome_124),
+		tlsclient.WithClientProfile(profile),
 		tlsclient.WithCookieJar(jar),
 		tlsclient.WithNotFollowRedirects(),
 	}

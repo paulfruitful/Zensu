@@ -21,12 +21,36 @@ type Client struct {
 	domain  string
 }
 
+func detectProfile(ua string) profiles.ClientProfile {
+	uaLower := strings.ToLower(ua)
+	if strings.Contains(uaLower, "iphone") || strings.Contains(uaLower, "ipad") {
+		if strings.Contains(uaLower, "os 18") {
+			return profiles.Safari_IOS_18_0
+		}
+		if strings.Contains(uaLower, "os 17") {
+			return profiles.Safari_IOS_17_0
+		}
+		return profiles.Safari_IOS_16_0
+	}
+	if strings.Contains(uaLower, "safari") && !strings.Contains(uaLower, "chrome") {
+		return profiles.Safari_16_0
+	}
+	if strings.Contains(uaLower, "firefox") {
+		return profiles.Firefox_120
+	}
+	if strings.Contains(uaLower, "opera") || strings.Contains(uaLower, "opr") {
+		return profiles.Opera_91
+	}
+	return profiles.Chrome_124
+}
+
 func NewClient(ua, cookies, domain string) (*Client, error) {
 	jar := tlsclient.NewCookieJar()
 
+	profile := detectProfile(ua)
 	options := []tlsclient.HttpClientOption{
 		tlsclient.WithTimeoutSeconds(30),
-		tlsclient.WithClientProfile(profiles.Chrome_124),
+		tlsclient.WithClientProfile(profile),
 		tlsclient.WithCookieJar(jar),
 	}
 	if proxy := os.Getenv("PROXY_URL"); proxy != "" {
@@ -49,6 +73,10 @@ func NewClient(ua, cookies, domain string) (*Client, error) {
 
 func (c *Client) seedCookies(rawURL string) {
 	u, _ := url.Parse(rawURL)
+	hostname := ""
+	if u != nil {
+		hostname = u.Hostname()
+	}
 	var httpCookies []*http.Cookie
 	for _, part := range strings.Split(c.cookies, ";") {
 		part = strings.TrimSpace(part)
@@ -60,11 +88,15 @@ func (c *Client) seedCookies(rawURL string) {
 			continue
 		}
 		httpCookies = append(httpCookies, &http.Cookie{
-			Name:  strings.TrimSpace(kv[0]),
-			Value: strings.TrimSpace(kv[1]),
+			Name:   strings.TrimSpace(kv[0]),
+			Value:  strings.TrimSpace(kv[1]),
+			Path:   "/",
+			Domain: hostname,
 		})
 	}
-	c.inner.SetCookies(u, httpCookies)
+	if u != nil {
+		c.inner.SetCookies(u, httpCookies)
+	}
 }
 
 func (c *Client) Get(rawURL string, extraHeaders map[string]string) (string, error) {
@@ -76,6 +108,9 @@ func (c *Client) Get(rawURL string, extraHeaders map[string]string) (string, err
 	}
 
 	req.Header.Set("User-Agent", c.ua)
+	if c.cookies != "" {
+		req.Header.Set("Cookie", c.cookies)
+	}
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
