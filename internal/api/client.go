@@ -146,8 +146,9 @@ func (c *Client) Get(rawURL string, extraHeaders map[string]string) (string, err
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 403 {
-		logger.Errorf("API_CF_BLOCKED", "403 Forbidden on %s — CF blocked, cookies need update", rawURL)
-		return "", fmt.Errorf("403 Forbidden — CF blocked, refresh cookies")
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		logger.Errorf("API_CF_BLOCKED", "403 Forbidden on %s — CF blocked, cookies need update: %s", rawURL, string(body))
+		return "", fmt.Errorf("403 Forbidden: %s", string(body))
 	}
 	if resp.StatusCode != 200 {
 		logger.Errorf("API_GET_BAD_STATUS", "HTTP %d returned for %s", resp.StatusCode, rawURL)
