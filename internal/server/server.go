@@ -140,6 +140,21 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/api/search", handleSearch(s))
 	mux.HandleFunc("/api/episodes", handleEpisodes(s))
 	mux.HandleFunc("/api/stream", handleStream(s))
+
+	// Cloudflare Clearance Web Portal endpoints
+	mux.HandleFunc("/portal", handlePortal(s))
+	mux.HandleFunc("/api/portal/status", handlePortalStatus(s))
+	mux.HandleFunc("/api/portal/submit-link", handlePortalSubmitLink(s))
+	mux.HandleFunc("/api/portal/submit-cookies", handlePortalSubmitCookies(s))
+	mux.HandleFunc("/api/portal/test", handlePortalTest(s))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			handlePortal(s)(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
+
 	return corsMiddleware(mux)
 }
 
@@ -155,7 +170,7 @@ func NewRouter(client *api.Client, extractor *kwik.Extractor, cfg *config.Config
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "*")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
@@ -176,7 +191,7 @@ func handleSearch(s *Server) http.HandlerFunc {
 		logger.Infof("SERVER_SEARCH", "Searching for anime matching %q", q)
 		client := s.Client()
 		if client == nil {
-			http.Error(w, "client not initialized", http.StatusInternalServerError)
+			http.Error(w, "Cloudflare clearance not configured. Visit /portal to authenticate.", http.StatusServiceUnavailable)
 			return
 		}
 
@@ -213,7 +228,7 @@ func handleEpisodes(s *Server) http.HandlerFunc {
 		logger.Infof("SERVER_EPISODES", "Fetching episodes for slug %s", slug)
 		client := s.Client()
 		if client == nil {
-			http.Error(w, "client not initialized", http.StatusInternalServerError)
+			http.Error(w, "Cloudflare clearance not configured. Visit /portal to authenticate.", http.StatusServiceUnavailable)
 			return
 		}
 

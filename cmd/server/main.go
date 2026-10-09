@@ -54,28 +54,12 @@ func main() {
 		} else {
 			fmt.Println("  \033[33m[INFO]\033[0m Clearance cookies are expired or invalid.")
 		}
-		if err := refreshCredentials(cfg); err != nil {
-			fmt.Printf("[ERROR] failed to resolve Cloudflare credentials: %v\n", err)
-			os.Exit(1)
-		}
-
-		var clientErr error
-		client, clientErr = api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
-		if clientErr != nil {
-			fmt.Printf("[ERROR] failed to init client: %v\n", clientErr)
-			os.Exit(1)
-		}
-
-		fmt.Println("  \033[32m[INFO]\033[0m Verifying credentials connection...")
-		if connErr := client.TestConnection(); connErr != nil {
-			logger.Errorf("SERVER_STARTUP_CONN_FAIL", "Connection test failed after refresh: %v", connErr)
-			fmt.Printf("  \033[31m[ERROR]\033[0m Connection verification failed: %v\n", connErr)
-			os.Exit(1)
-		}
-		fmt.Println("  \033[32m[SUCCESS]\033[0m Connection test passed! Credentials are valid.")
 	}
 
-	extractor := kwik.NewExtractor(cfg.UA, cfg.Cookies)
+	var extractor *kwik.Extractor
+	if cfg.UA != "" && cfg.Cookies != "" {
+		extractor = kwik.NewExtractor(cfg.UA, cfg.Cookies)
+	}
 
 	// Callback to launch browser, refresh Cloudflare cookies, and reinitialize clients
 	refreshFunc := func() (*api.Client, *kwik.Extractor, error) {
@@ -126,7 +110,7 @@ func main() {
 	if port <= 0 {
 		port = 8080
 	}
-	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	serverAddr := fmt.Sprintf("0.0.0.0:%d", port)
 	httpServer := &http.Server{
 		Addr:    serverAddr,
 		Handler: router,
@@ -145,6 +129,7 @@ func main() {
 
 	fmt.Println()
 	fmt.Printf("  \033[1;36mZensu Streaming Server running at http://%s\033[0m\n", serverAddr)
+	fmt.Printf("  \033[1;35mCloudflare Web Portal: http://<your-ip>:%d/portal\033[0m\n", port)
 	fmt.Println("  Press Ctrl+C to stop.")
 	fmt.Println()
 

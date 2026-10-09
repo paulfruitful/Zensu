@@ -355,19 +355,31 @@ func sendAndReceive(conn *websocket.Conn, method string, params map[string]any, 
 }
 
 func getCookies(conn *websocket.Conn, domain string) ([]Cookie, error) {
+	cleanDomain := domain
+	if !strings.HasPrefix(cleanDomain, "http://") && !strings.HasPrefix(cleanDomain, "https://") {
+		cleanDomain = "https://" + cleanDomain
+	}
 	params := map[string]any{
-		"urls": []string{domain},
+		"urls": []string{cleanDomain},
 	}
 	resultRaw, err := sendAndReceive(conn, "Network.getCookies", params, 1)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		var result GetCookiesResult
+		if err := json.Unmarshal(resultRaw, &result); err == nil && len(result.Cookies) > 0 {
+			return result.Cookies, nil
+		}
 	}
 
-	var result GetCookiesResult
-	if err := json.Unmarshal(resultRaw, &result); err != nil {
-		return nil, err
+	// Fallback to getAllCookies if URL-scoped cookies returned empty
+	allRaw, allErr := sendAndReceive(conn, "Network.getAllCookies", nil, 98)
+	if allErr == nil {
+		var allResult GetCookiesResult
+		if err := json.Unmarshal(allRaw, &allResult); err == nil && len(allResult.Cookies) > 0 {
+			return allResult.Cookies, nil
+		}
 	}
-	return result.Cookies, nil
+
+	return nil, err
 }
 
 func getUserAgent(conn *websocket.Conn) (string, error) {
@@ -429,12 +441,16 @@ const stealthJS = `(() => {
 
 func injectStealth(conn *websocket.Conn) {
 	_, _ = sendAndReceive(conn, "Page.enable", nil, 90)
-	_, _ = sendAndReceive(conn, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": stealthJS}, 91)
-	_, _ = sendAndReceive(conn, "Runtime.evaluate", map[string]any{"expression": stealthJS}, 92)
-	_, _ = sendAndReceive(conn, "Page.reload", map[string]any{"ignoreCache": true}, 93)
+	_, _ = sendAndReceive(conn, "Network.enable", nil, 91)
+	_, _ = sendAndReceive(conn, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": stealthJS}, 92)
+	_, _ = sendAndReceive(conn, "Runtime.evaluate", map[string]any{"expression": stealthJS}, 93)
 }
 
 func pollCookiesAndUA(wsURL string, domain string, oldCookie string) (*Credentials, error) {
+	return pollCookiesAndUAWithURL(wsURL, domain, "", oldCookie)
+}
+
+func pollCookiesAndUAWithURL(wsURL string, domain string, targetURL string, oldCookie string) (*Credentials, error) {
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("websocket dial failed: %w", err)
@@ -443,7 +459,13 @@ func pollCookiesAndUA(wsURL string, domain string, oldCookie string) (*Credentia
 
 	injectStealth(conn)
 
-	timeout := time.After(3 * time.Minute)
+	if targetURL != "" {
+		_, _ = sendAndReceive(conn, "Page.navigate", map[string]any{"url": targetURL}, 94)
+	} else {
+		_, _ = sendAndReceive(conn, "Page.reload", map[string]any{"ignoreCache": true}, 94)
+	}
+
+	timeout := time.After(90 * time.Second)
 	ticker := time.NewTicker(1500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -452,11 +474,16 @@ func pollCookiesAndUA(wsURL string, domain string, oldCookie string) (*Credentia
 	for {
 		select {
 		case <-timeout:
-			return nil, fmt.Errorf("timeout waiting for Cloudflare clearance cookies (3 minutes)")
+			return nil, fmt.Errorf("timeout waiting for Cloudflare clearance cookies (90 seconds)")
 		case <-ticker.C:
 			// 1. Verify that the challenge/verification page is not active by checking the document title
 			title, _ := getPageTitle(conn)
 			lowerTitle := strings.ToLower(title)
+
+			if strings.Contains(lowerTitle, "blocked") || strings.Contains(lowerTitle, "access denied") {
+				return nil, fmt.Errorf("Cloudflare blocked the server IP. Please submit cookies directly via the Direct Cookie tab")
+			}
+
 			isChallenge := strings.Contains(lowerTitle, "just a moment") ||
 				strings.Contains(lowerTitle, "attention required") ||
 				strings.Contains(lowerTitle, "security verification") ||
@@ -522,14 +549,24 @@ func cleanProfileDir(dir string) {
 }
 
 func FetchCredentials(domain string, browserType string, customPath string, oldCookie string) (*Credentials, error) {
+	return FetchCredentialsFromURL(domain, browserType, customPath, oldCookie)
+}
+
+func FetchCredentialsFromURL(targetURL string, browserType string, customPath string, oldCookie string) (*Credentials, error) {
 	port := 9322
 	spawned := false
 	var cmd *exec.Cmd
 	var profileDir string
 
-	if !strings.HasPrefix(domain, "http://") && !strings.HasPrefix(domain, "https://") {
-		domain = "https://" + domain
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		targetURL = "https://" + targetURL
 	}
+
+	domainHost := getDomainHost(targetURL)
+	if domainHost == "" {
+		domainHost = "animepahe.pw"
+	}
+	baseDomain := "https://" + domainHost
 
 	if !IsCDPReady(port) {
 		browserPath, err := FindBrowserPath(browserType, customPath)
@@ -544,7 +581,7 @@ func FetchCredentials(domain string, browserType string, customPath string, oldC
 		profileDir = filepath.Join(userConfigDir, "zensu", "chrome-profile-isolated")
 		cleanProfileDir(profileDir)
 
-		cmd, err = launchBrowser(browserPath, port, profileDir, domain)
+		cmd, err = launchBrowser(browserPath, port, profileDir, targetURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to launch browser: %w", err)
 		}
@@ -568,7 +605,7 @@ func FetchCredentials(domain string, browserType string, customPath string, oldC
 		}
 	}
 
-	target, err := getTargetTab(port, domain)
+	target, err := getTargetTab(port, domainHost)
 	if err != nil {
 		if spawned && cmd != nil && cmd.Process != nil {
 			_ = cmd.Process.Kill()
@@ -578,7 +615,7 @@ func FetchCredentials(domain string, browserType string, customPath string, oldC
 		return nil, err
 	}
 
-	credentials, err := pollCookiesAndUA(target.WebSocketDebuggerURL, domain, oldCookie)
+	credentials, err := pollCookiesAndUAWithURL(target.WebSocketDebuggerURL, baseDomain, targetURL, oldCookie)
 	if err != nil {
 		if spawned && cmd != nil && cmd.Process != nil {
 			_ = cmd.Process.Kill()
@@ -601,3 +638,4 @@ func FetchCredentials(domain string, browserType string, customPath string, oldC
 
 	return credentials, nil
 }
+
