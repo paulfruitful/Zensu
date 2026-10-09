@@ -13,6 +13,9 @@ import (
 	"strconv"
 	"strings"
 
+	"sync"
+	"time"
+
 	"zensu/internal/api"
 	"zensu/internal/config"
 	"zensu/internal/kwik"
@@ -27,12 +30,126 @@ func sanitizeName(name string) string {
 	return strings.TrimSpace(name)
 }
 
-func NewRouter(client *api.Client, extractor *kwik.Extractor, cfg *config.Config) http.Handler {
+// IsExpiredError returns true if the error indicates that Cloudflare clearance or cookies have expired or been blocked.
+func IsExpiredError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "403") ||
+		strings.Contains(msg, "cf blocked") ||
+		strings.Contains(msg, "refresh cookies") ||
+		strings.Contains(msg, "clearance") ||
+		strings.Contains(msg, "forbidden")
+}
+
+type CredentialsRefresher func() (*api.Client, *kwik.Extractor, error)
+
+type Server struct {
+	mu          sync.RWMutex
+	client      *api.Client
+	extractor   *kwik.Extractor
+	cfg         *config.Config
+	refresher   CredentialsRefresher
+	refreshMu   sync.Mutex
+	lastRefresh time.Time
+}
+
+func NewServer(client *api.Client, extractor *kwik.Extractor, cfg *config.Config, refresher CredentialsRefresher) *Server {
+	return &Server{
+		client:    client,
+		extractor: extractor,
+		cfg:       cfg,
+		refresher: refresher,
+	}
+}
+
+func (s *Server) Client() *api.Client {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.client
+}
+
+func (s *Server) Extractor() *kwik.Extractor {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.extractor
+}
+
+func (s *Server) Config() *config.Config {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg
+}
+
+func (s *Server) SetCredentials(client *api.Client, extractor *kwik.Extractor) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.client = client
+	s.extractor = extractor
+}
+
+func (s *Server) hasRefresher() bool {
+	return s != nil && s.refresher != nil
+}
+
+func (s *Server) RefreshCredentials() error {
+	if !s.hasRefresher() {
+		return fmt.Errorf("no refresher configured")
+	}
+
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	// Double check: if refreshed within last 5 seconds and connection is valid, skip re-launching browser
+	if !s.lastRefresh.IsZero() && time.Since(s.lastRefresh) < 5*time.Second {
+		currentClient := s.Client()
+		if currentClient != nil && currentClient.TestConnection() == nil {
+			logger.Infof("SERVER_REFRESH_SKIP", "Credentials refreshed recently and connection valid; skipping redundant browser launch")
+			return nil
+		}
+	}
+
+	logger.Infof("SERVER_REFRESH_START", "Launching browser to refresh Cloudflare credentials...")
+	newClient, newExtractor, err := s.refresher()
+	if err != nil {
+		logger.Errorf("SERVER_REFRESH_FAIL", "Failed to refresh credentials: %v", err)
+		return err
+	}
+
+	s.lastRefresh = time.Now()
+	s.SetCredentials(newClient, newExtractor)
+	logger.Infof("SERVER_REFRESH_SUCCESS", "Successfully refreshed credentials and reinitialized clients")
+	return nil
+}
+
+func (s *Server) Router() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/search", handleSearch(client))
-	mux.HandleFunc("/api/episodes", handleEpisodes(client))
-	mux.HandleFunc("/api/stream", handleStream(client, extractor, cfg))
+	mux.HandleFunc("/api/search", handleSearch(s))
+	mux.HandleFunc("/api/episodes", handleEpisodes(s))
+	mux.HandleFunc("/api/stream", handleStream(s))
 	return corsMiddleware(mux)
+}
+
+func NewRouter(client *api.Client, extractor *kwik.Extractor, cfg *config.Config, refresher ...CredentialsRefresher) http.Handler {
+	var ref CredentialsRefresher
+	if len(refresher) > 0 {
+		ref = refresher[0]
+	}
+	s := NewServer(client, extractor, cfg, ref)
+	return s.Router()
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -48,7 +165,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func handleSearch(client *api.Client) http.HandlerFunc {
+func handleSearch(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
 		if q == "" {
@@ -57,7 +174,23 @@ func handleSearch(client *api.Client) http.HandlerFunc {
 		}
 
 		logger.Infof("SERVER_SEARCH", "Searching for anime matching %q", q)
+		client := s.Client()
+		if client == nil {
+			http.Error(w, "client not initialized", http.StatusInternalServerError)
+			return
+		}
+
 		results, err := client.Search(q)
+		if err != nil && IsExpiredError(err) && s.hasRefresher() {
+			logger.Warnf("SERVER_SEARCH_CF_EXPIRED", "Search blocked by Cloudflare (expired cookie): %v. Launching browser to refresh...", err)
+			if refErr := s.RefreshCredentials(); refErr == nil {
+				client = s.Client()
+				if client != nil {
+					results, err = client.Search(q)
+				}
+			}
+		}
+
 		if err != nil {
 			logger.Errorf("SERVER_SEARCH_ERR", "Search failed: %v", err)
 			http.Error(w, fmt.Sprintf("search failed: %v", err), http.StatusInternalServerError)
@@ -69,7 +202,7 @@ func handleSearch(client *api.Client) http.HandlerFunc {
 	}
 }
 
-func handleEpisodes(client *api.Client) http.HandlerFunc {
+func handleEpisodes(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := r.URL.Query().Get("slug")
 		if slug == "" {
@@ -78,7 +211,23 @@ func handleEpisodes(client *api.Client) http.HandlerFunc {
 		}
 
 		logger.Infof("SERVER_EPISODES", "Fetching episodes for slug %s", slug)
+		client := s.Client()
+		if client == nil {
+			http.Error(w, "client not initialized", http.StatusInternalServerError)
+			return
+		}
+
 		episodes, err := client.GetEpisodes(slug)
+		if err != nil && IsExpiredError(err) && s.hasRefresher() {
+			logger.Warnf("SERVER_EPISODES_CF_EXPIRED", "Episodes request blocked by Cloudflare: %v. Launching browser to refresh...", err)
+			if refErr := s.RefreshCredentials(); refErr == nil {
+				client = s.Client()
+				if client != nil {
+					episodes, err = client.GetEpisodes(slug)
+				}
+			}
+		}
+
 		if err != nil {
 			logger.Errorf("SERVER_EPISODES_ERR", "Failed to fetch episodes: %v", err)
 			http.Error(w, fmt.Sprintf("failed to fetch episodes: %v", err), http.StatusInternalServerError)
@@ -90,12 +239,20 @@ func handleEpisodes(client *api.Client) http.HandlerFunc {
 	}
 }
 
-func handleStream(client *api.Client, extractor *kwik.Extractor, cfg *config.Config) http.HandlerFunc {
+func handleStream(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		proxyURL := r.URL.Query().Get("proxy_url")
+		cfg := s.Config()
+		ua := ""
+		cookies := ""
+		if cfg != nil {
+			ua = cfg.UA
+			cookies = cfg.Cookies
+		}
+
 		if proxyURL != "" {
 			logger.Infof("SERVER_STREAM_PROXY_RAW", "Proxying raw chunk/stream: %s", proxyURL)
-			proxyStream(w, r, proxyURL, cfg.UA)
+			proxyStream(w, r, proxyURL, ua)
 			return
 		}
 
@@ -109,19 +266,35 @@ func handleStream(client *api.Client, extractor *kwik.Extractor, cfg *config.Con
 		}
 
 		quality := r.URL.Query().Get("quality")
-		if quality == "" {
+		if quality == "" && cfg != nil {
 			quality = cfg.Quality
 		}
 		audio := r.URL.Query().Get("audio")
-		if audio == "" {
+		if audio == "" && cfg != nil {
 			audio = cfg.Audio
 		}
 
 		logger.Infof("SERVER_STREAM_REQ", "Stream requested for slug: %s, session: %s, title: %q", slug, epSession, title)
 
+		client := s.Client()
+		if client == nil {
+			http.Error(w, "client not initialized", http.StatusInternalServerError)
+			return
+		}
+
 		if title != "" {
 			sanitizedTitle := sanitizeName(title)
 			episodes, err := client.GetEpisodes(slug)
+			if err != nil && IsExpiredError(err) && s.hasRefresher() {
+				logger.Warnf("SERVER_STREAM_CF_EXPIRED", "GetEpisodes blocked by Cloudflare: %v. Launching browser to refresh...", err)
+				if refErr := s.RefreshCredentials(); refErr == nil {
+					client = s.Client()
+					if client != nil {
+						episodes, err = client.GetEpisodes(slug)
+					}
+				}
+			}
+
 			if err == nil {
 				var epNum float64
 				found := false
@@ -139,7 +312,10 @@ func handleStream(client *api.Client, extractor *kwik.Extractor, cfg *config.Con
 						epStr = fmt.Sprintf("E%.1f", epNum)
 					}
 
-					downloadDir := cfg.DownloadDir
+					downloadDir := ""
+					if cfg != nil {
+						downloadDir = cfg.DownloadDir
+					}
 					if strings.HasPrefix(downloadDir, "~/") {
 						home, _ := os.UserHomeDir()
 						downloadDir = home + downloadDir[1:]
@@ -156,6 +332,16 @@ func handleStream(client *api.Client, extractor *kwik.Extractor, cfg *config.Con
 		}
 
 		candidates, err := client.GetKwikLinks(slug, epSession)
+		if err != nil && IsExpiredError(err) && s.hasRefresher() {
+			logger.Warnf("SERVER_STREAM_CF_EXPIRED", "GetKwikLinks blocked by Cloudflare: %v. Launching browser to refresh...", err)
+			if refErr := s.RefreshCredentials(); refErr == nil {
+				client = s.Client()
+				if client != nil {
+					candidates, err = client.GetKwikLinks(slug, epSession)
+				}
+			}
+		}
+
 		if err != nil {
 			logger.Errorf("SERVER_STREAM_KWIK_ERR", "Failed to resolve kwik links: %v", err)
 			http.Error(w, fmt.Sprintf("failed to resolve links: %v", err), http.StatusInternalServerError)
@@ -172,11 +358,34 @@ func handleStream(client *api.Client, extractor *kwik.Extractor, cfg *config.Con
 			return
 		}
 
+		extractor := s.Extractor()
+		if extractor == nil {
+			http.Error(w, "extractor not initialized", http.StatusInternalServerError)
+			return
+		}
+
 		dlURL, isHLS, err := extractor.GetDownloadURL(kwikURL)
+		if err != nil && IsExpiredError(err) && s.hasRefresher() {
+			logger.Warnf("SERVER_STREAM_CF_EXPIRED", "Extractor blocked by Cloudflare: %v. Launching browser to refresh...", err)
+			if refErr := s.RefreshCredentials(); refErr == nil {
+				extractor = s.Extractor()
+				if extractor != nil {
+					dlURL, isHLS, err = extractor.GetDownloadURL(kwikURL)
+				}
+			}
+		}
+
 		if err != nil {
 			logger.Errorf("SERVER_STREAM_EXTRACT_ERR", "Failed to extract direct download URL: %v", err)
 			http.Error(w, fmt.Sprintf("extraction failed: %v", err), http.StatusInternalServerError)
 			return
+		}
+
+		// Re-fetch current config for UA and cookies
+		cfg = s.Config()
+		if cfg != nil {
+			ua = cfg.UA
+			cookies = cfg.Cookies
 		}
 
 		if isHLS {
@@ -192,10 +401,10 @@ func handleStream(client *api.Client, extractor *kwik.Extractor, cfg *config.Con
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			req.Header.Set("User-Agent", cfg.UA)
+			req.Header.Set("User-Agent", ua)
 			req.Header.Set("Referer", "https://kwik.cx/")
-			if cfg.Cookies != "" {
-				req.Header.Set("Cookie", cfg.Cookies)
+			if cookies != "" {
+				req.Header.Set("Cookie", cookies)
 			}
 
 			httpClient := &http.Client{}
@@ -222,7 +431,7 @@ func handleStream(client *api.Client, extractor *kwik.Extractor, cfg *config.Con
 		}
 
 		logger.Infof("SERVER_STREAM_PROXY", "Proxying remote stream: %s", dlURL)
-		proxyStream(w, r, dlURL, cfg.UA)
+		proxyStream(w, r, dlURL, ua)
 	}
 }
 

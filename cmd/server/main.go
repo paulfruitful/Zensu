@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"zensu/internal/api"
 	"zensu/internal/browser"
@@ -76,8 +77,50 @@ func main() {
 
 	extractor := kwik.NewExtractor(cfg.UA, cfg.Cookies)
 
-	// Create router from modular internal package
-	router := server.NewRouter(client, extractor, cfg)
+	// Callback to launch browser, refresh Cloudflare cookies, and reinitialize clients
+	refreshFunc := func() (*api.Client, *kwik.Extractor, error) {
+		if err := refreshCredentials(cfg); err != nil {
+			return nil, nil, err
+		}
+		newClient, err := api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to init client: %w", err)
+		}
+		newExtractor := kwik.NewExtractor(cfg.UA, cfg.Cookies)
+		return newClient, newExtractor, nil
+	}
+
+	srv := server.NewServer(client, extractor, cfg, refreshFunc)
+	router := srv.Router()
+
+	// Background monitor to proactively detect expired cookies and launch browser
+	stopMonitor := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopMonitor:
+				return
+			case <-ticker.C:
+				currentClient := srv.Client()
+				if currentClient == nil {
+					continue
+				}
+				if connErr := currentClient.TestConnection(); connErr != nil && server.IsExpiredError(connErr) {
+					logger.Warnf("SERVER_COOKIE_EXPIRED", "Background check detected expired cookie (%v). Launching browser to refresh...", connErr)
+					fmt.Println("\n  \033[33m[WARN]\033[0m Background check: Cloudflare clearance cookie expired or invalid.")
+					if err := srv.RefreshCredentials(); err != nil {
+						logger.Errorf("SERVER_COOKIE_REFRESH_ERR", "Failed to refresh cookie in background: %v", err)
+						fmt.Printf("  \033[31m[ERROR]\033[0m Failed to refresh credentials: %v\n", err)
+					} else {
+						logger.Infof("SERVER_COOKIE_REFRESH_OK", "Successfully refreshed credentials and reconnected")
+						fmt.Println("  \033[32m[SUCCESS]\033[0m Credentials refreshed successfully! Streaming server ready.")
+					}
+				}
+			}
+		}
+	}()
 
 	port := cfg.ServerPort
 	if port <= 0 {
@@ -95,6 +138,7 @@ func main() {
 	go func() {
 		<-sigChan
 		fmt.Println("\n  [INFO] Shutting down streaming server...")
+		close(stopMonitor)
 		httpServer.Close()
 		os.Exit(0)
 	}()

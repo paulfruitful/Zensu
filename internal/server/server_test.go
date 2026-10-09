@@ -1,10 +1,14 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"zensu/internal/api"
+	"zensu/internal/kwik"
 )
 
 func TestRouterMiddlewareAndEndpoints(t *testing.T) {
@@ -69,3 +73,43 @@ http://localhost:8080/api/stream?proxy_url=https%3A%2F%2Fvault-08.uwucdn.top%2Fs
 		t.Errorf("rewritten m3u8 does not match expected.\nGot:\n%s\n\nExpected:\n%s", result, expected)
 	}
 }
+
+func TestIsExpiredError(t *testing.T) {
+	tests := []struct {
+		err      error
+		expected bool
+	}{
+		{nil, false},
+		{http.ErrHandlerTimeout, false},
+		{&url.Error{Op: "Get", URL: "http://example.com", Err: http.ErrHandlerTimeout}, false},
+		{fmt.Errorf("403 Forbidden — CF blocked, refresh cookies"), true},
+		{fmt.Errorf("403 from kwik — CF blocked"), true},
+		{fmt.Errorf("HTTP 403"), true},
+		{fmt.Errorf("Cloudflare clearance expired"), true},
+		{fmt.Errorf("forbidden"), true},
+	}
+
+	for _, tt := range tests {
+		got := IsExpiredError(tt.err)
+		if got != tt.expected {
+			t.Errorf("IsExpiredError(%v) = %v, expected %v", tt.err, got, tt.expected)
+		}
+	}
+}
+
+func TestServerRefreshCredentials(t *testing.T) {
+	refreshCount := 0
+	srv := NewServer(nil, nil, nil, func() (*api.Client, *kwik.Extractor, error) {
+		refreshCount++
+		return nil, nil, nil
+	})
+
+	if err := srv.RefreshCredentials(); err != nil {
+		t.Fatalf("unexpected error from RefreshCredentials: %v", err)
+	}
+
+	if refreshCount != 1 {
+		t.Fatalf("expected refreshCount to be 1, got %d", refreshCount)
+	}
+}
+
