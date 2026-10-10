@@ -358,6 +358,33 @@ func handlePortalTest(s *Server) http.HandlerFunc {
 	}
 }
 
+func handlePortalTriggerBrowser(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		logger.Infof("PORTAL_TRIGGER_BROWSER", "User triggered browser Cloudflare verification from portal")
+		err := s.RefreshCredentials()
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			logger.Errorf("PORTAL_BROWSER_ERR", "Browser verification failed: %v", err)
+			json.NewEncoder(w).Encode(actionResponse{
+				Success: false,
+				Error:   fmt.Sprintf("Browser verification failed: %v", err),
+			})
+			return
+		}
+
+		logger.Infof("PORTAL_BROWSER_OK", "Browser verification succeeded and credentials updated")
+		json.NewEncoder(w).Encode(actionResponse{
+			Success: true,
+			Message: "Browser verification completed successfully! Cloudflare credentials updated and server is connected.",
+		})
+	}
+}
+
 const portalHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -738,15 +765,32 @@ const portalHTML = `<!DOCTYPE html>
     <!-- Main Tabs Card -->
     <main class="card">
       <div class="tabs">
-        <button class="tab-btn active" onclick="switchTab('linkTab')">&#x1F517; Paste AnimePahe Link</button>
-        <button class="tab-btn" onclick="switchTab('cookieTab')">&#x1F36A; Direct Cookie / UA</button>
-        <button class="tab-btn" onclick="switchTab('mobileTab')">&#x1F4F1; Mobile Guide</button>
+        <button class="tab-btn active" onclick="switchTab('browserTab')">&#x1F310; Launch Browser</button>
+        <button class="tab-btn" onclick="switchTab('linkTab')">&#x1F517; Paste Link</button>
+        <button class="tab-btn" onclick="switchTab('cookieTab')">&#x1F36A; Direct Cookie</button>
+        <button class="tab-btn" onclick="switchTab('mobileTab')">&#x1F4D6; Guide</button>
+      </div>
+
+      <!-- Tab 0: Launch Browser (Primary) -->
+      <div id="browserTab" class="tab-content active">
+        <div class="info-box">
+          <strong>&#x1F680; Automatic Browser Verification:</strong>
+          Click below to trigger the browser on the server. If Cloudflare displays a <em>"Verify you are human"</em> checkbox, click it. Zensu will automatically capture the clearance credentials, update the server, and activate streaming!
+          <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 12px; color: #94a3b8;">
+            &#x1F4BB; <strong>Running on VPS / Docker?</strong> You can view and click the browser screen via <a href="/vnc.html" target="_blank" style="color: #818cf8; font-weight: 600; text-decoration: underline;">noVNC Virtual Desktop (:6080)</a>.
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top: 12px;">
+          <button id="triggerBrowserBtn" class="btn btn-primary" onclick="triggerBrowser()">
+            <span id="triggerBrowserBtnText">&#x1F310; Launch Browser to Solve Cloudflare</span>
+          </button>
+        </div>
       </div>
 
       <!-- Tab 1: Paste Link -->
-      <div id="linkTab" class="tab-content active">
+      <div id="linkTab" class="tab-content">
         <div class="info-box">
-          <strong>&#x1F4A1; Recommended Method:</strong> Open AnimePahe on your phone or laptop. Once the Cloudflare verification completes, copy the full URL from your browser address bar (it will contain <code>__cf_chl_tk=...</code>) and paste it below.
+          <strong>&#x1F4A1; Paste Tokenized Link:</strong> Open AnimePahe on your phone or laptop. Once the Cloudflare verification completes, copy the full URL from your browser address bar (it will contain <code>__cf_chl_tk=...</code>) and paste it below.
         </div>
         <div class="form-group">
           <label for="linkInput">
@@ -766,7 +810,7 @@ const portalHTML = `<!DOCTYPE html>
       <!-- Tab 2: Direct Cookie / UA -->
       <div id="cookieTab" class="tab-content">
         <div class="info-box">
-          <strong>Direct Cookie Upload:</strong> If Cloudflare blocks the VPS IP completely, paste your <code>cf_clearance</code> cookie directly from your phone/desktop. Your current browser User-Agent has been pre-filled automatically!
+          <strong>Direct Cookie Upload:</strong> If you extracted cookies using DevTools (F12) or another tool, paste your <code>cf_clearance</code> cookie below. Note: Cloudflare clearance cookies are bound to the IP address where they were solved!
         </div>
         <div class="form-group">
           <label for="cfInput">
@@ -790,34 +834,25 @@ const portalHTML = `<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Tab 3: Mobile Guide -->
+      <!-- Tab 3: Guide -->
       <div id="mobileTab" class="tab-content">
         <div class="info-box">
-          <strong>Extracting from Phone (Safari / Chrome):</strong>
+          <strong>How Cloudflare Clearance Works:</strong>
+          Cloudflare's <code>cf_clearance</code> cookie is marked <code>HttpOnly</code> and cryptographically locked to the client's IP address.
         </div>
         <div class="step-list">
           <div class="step-item">
             <div class="step-num">1</div>
-            <div>Open <a href="https://animepahe.pw" target="_blank" style="color: #818cf8; font-weight: 600;">https://animepahe.pw</a> in your phone's browser.</div>
+            <div><strong>Best Method:</strong> Use the <strong>Launch Browser</strong> tab above. The browser runs directly on the server's IP, so the clearance matches 100%.</div>
           </div>
           <div class="step-item">
             <div class="step-num">2</div>
-            <div>Complete the Cloudflare "Verify you are human" checkbox if prompted.</div>
+            <div><strong>Mobile History Trick:</strong> On your phone, open <a href="https://animepahe.pw" target="_blank" style="color: #818cf8; font-weight: 600;">https://animepahe.pw</a>. Solve the challenge. Check your browser history for the URL with <code>?__cf_chl_tk=...</code>, copy it, and paste it in the <strong>Paste Link</strong> tab!</div>
           </div>
           <div class="step-item">
             <div class="step-num">3</div>
-            <div>Look at the address bar: if it redirected with <code>?__cf_chl_tk=...</code>, simply copy the URL and paste it in the <strong>Paste AnimePahe Link</strong> tab!</div>
+            <div><strong>PC DevTools:</strong> On laptop/desktop Chrome, press F12 &rarr; Application &rarr; Cookies &rarr; copy <code>cf_clearance</code>.</div>
           </div>
-          <div class="step-item">
-            <div class="step-num">4</div>
-            <div>Or bookmark this snippet to extract cookies in 1 tap on mobile:</div>
-          </div>
-        </div>
-        <div class="code-box" id="bookmarkletCode" onclick="copyBookmarklet()">
-          javascript:(function(){prompt('Your Cookies:',document.cookie);})();
-        </div>
-        <div class="btn-row" style="margin-top: 12px;">
-          <button class="btn btn-secondary" style="width: 100%;" onclick="copyBookmarklet()">&#x1F4CB; Copy 1-Tap Mobile Helper Script</button>
         </div>
       </div>
     </main>
@@ -867,9 +902,41 @@ const portalHTML = `<!DOCTYPE html>
     function switchTab(tabId) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-      document.getElementById(tabId).classList.add('active');
-      const idx = tabId === 'linkTab' ? 0 : (tabId === 'cookieTab' ? 1 : 2);
-      document.querySelectorAll('.tab-btn')[idx].classList.add('active');
+      const target = document.getElementById(tabId);
+      if (target) target.classList.add('active');
+      const tabs = ['browserTab', 'linkTab', 'cookieTab', 'mobileTab'];
+      const idx = tabs.indexOf(tabId);
+      if (idx !== -1) {
+        const btns = document.querySelectorAll('.tab-btn');
+        if (btns[idx]) btns[idx].classList.add('active');
+      }
+    }
+
+    async function triggerBrowser() {
+      const btn = document.getElementById('triggerBrowserBtn');
+      const btnText = document.getElementById('triggerBrowserBtnText');
+      btn.disabled = true;
+      btnText.innerHTML = '<span class="spinner"></span> Browser Active & Waiting for Verification...';
+      log('Triggering browser on server to solve Cloudflare challenge...', 'info');
+
+      try {
+        const res = await fetch('/api/portal/trigger-browser', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          log(data.message, 'success');
+          alert('Success! ' + data.message);
+          updateStatus();
+        } else {
+          log('Browser verification failed: ' + (data.error || 'Unknown error'), 'error');
+          alert('Browser verification failed: ' + data.error);
+        }
+      } catch (err) {
+        log('Request failed: ' + err.message, 'error');
+        alert('Server request failed: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btnText.innerHTML = '&#x1F310; Launch Browser to Solve Cloudflare';
+      }
     }
 
     function fillLocalUA() {

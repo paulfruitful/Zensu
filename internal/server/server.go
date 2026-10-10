@@ -144,6 +144,7 @@ func (s *Server) Router() http.Handler {
 	// Cloudflare Clearance Web Portal endpoints
 	mux.HandleFunc("/portal", handlePortal(s))
 	mux.HandleFunc("/api/portal/status", handlePortalStatus(s))
+	mux.HandleFunc("/api/portal/trigger-browser", handlePortalTriggerBrowser(s))
 	mux.HandleFunc("/api/portal/submit-link", handlePortalSubmitLink(s))
 	mux.HandleFunc("/api/portal/submit-cookies", handlePortalSubmitCookies(s))
 	mux.HandleFunc("/api/portal/test", handlePortalTest(s))

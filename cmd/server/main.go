@@ -54,6 +54,24 @@ func main() {
 		} else {
 			fmt.Println("  \033[33m[INFO]\033[0m Clearance cookies are expired or invalid.")
 		}
+		if err := refreshCredentials(cfg); err != nil {
+			logger.Warnf("STARTUP_REFRESH_ERR", "Browser verification failed or was cancelled: %v", err)
+			fmt.Printf("  \033[33m[WARN]\033[0m Browser verification failed: %v\n", err)
+			fmt.Println("         Web portal is ready; you can re-trigger browser verification or upload credentials from the portal.")
+		} else {
+			var clientErr error
+			client, clientErr = api.NewClient(cfg.UA, cfg.Cookies, cfg.Domain)
+			if clientErr == nil {
+				fmt.Println("  \033[32m[INFO]\033[0m Verifying credentials connection...")
+				if connErr := client.TestConnection(); connErr != nil {
+					logger.Warnf("STARTUP_CONN_FAIL", "Connection test failed after refresh: %v", connErr)
+					fmt.Printf("  \033[33m[WARN]\033[0m Connection verification failed: %v\n", connErr)
+				} else {
+					fmt.Println("  \033[32m[SUCCESS]\033[0m Connection test passed! Credentials are valid.")
+					needsSolve = false
+				}
+			}
+		}
 	}
 
 	var extractor *kwik.Extractor
