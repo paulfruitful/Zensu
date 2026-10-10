@@ -358,6 +358,10 @@ func handlePortalTest(s *Server) http.HandlerFunc {
 	}
 }
 
+type triggerBrowserRequest struct {
+	Browser string `json:"browser"`
+}
+
 func handlePortalTriggerBrowser(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -365,7 +369,18 @@ func handlePortalTriggerBrowser(s *Server) http.HandlerFunc {
 			return
 		}
 
-		logger.Infof("PORTAL_TRIGGER_BROWSER", "User triggered browser Cloudflare verification from portal")
+		var req triggerBrowserRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		chosenBrowser := strings.ToLower(strings.TrimSpace(req.Browser))
+		if chosenBrowser != "" {
+			cfg := s.Config()
+			if cfg != nil {
+				cfg.Browser = chosenBrowser
+				_ = cfg.Save()
+			}
+		}
+
+		logger.Infof("PORTAL_TRIGGER_BROWSER", "User triggered browser Cloudflare verification (engine: %s)", chosenBrowser)
 		err := s.RefreshCredentials()
 		w.Header().Set("Content-Type", "application/json")
 		if err != nil {
@@ -780,7 +795,21 @@ const portalHTML = `<!DOCTYPE html>
             &#x1F4BB; <strong>Running on VPS / Docker?</strong> You can view and click the browser screen via <a href="/vnc.html" target="_blank" style="color: #818cf8; font-weight: 600; text-decoration: underline;">noVNC Virtual Desktop (:6080)</a>.
           </div>
         </div>
-        <div class="btn-row" style="margin-top: 12px;">
+
+        <div class="form-group" style="margin-top: 14px;">
+          <label for="browserSelect">
+            Browser Engine to Launch
+            <span class="label-badge">Select Engine</span>
+          </label>
+          <select id="browserSelect" style="width: 100%; background: var(--input-bg); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 12px 14px; color: var(--text-main); font-size: 14px; outline: none;">
+            <option value="brave" selected>🦁 Brave Browser (Recommended: Privacy & Stealth)</option>
+            <option value="edge">🌊 Microsoft Edge (High Compatibility)</option>
+            <option value="chrome">🌐 Google Chrome Stable</option>
+            <option value="auto">⚡ Auto-Detect Available Browser</option>
+          </select>
+        </div>
+
+        <div class="btn-row" style="margin-top: 14px;">
           <button id="triggerBrowserBtn" class="btn btn-primary" onclick="triggerBrowser()">
             <span id="triggerBrowserBtnText">&#x1F310; Launch Browser to Solve Cloudflare</span>
           </button>
@@ -913,14 +942,20 @@ const portalHTML = `<!DOCTYPE html>
     }
 
     async function triggerBrowser() {
+      const browserSelect = document.getElementById('browserSelect');
+      const browserChoice = browserSelect ? browserSelect.value : 'brave';
       const btn = document.getElementById('triggerBrowserBtn');
       const btnText = document.getElementById('triggerBrowserBtnText');
       btn.disabled = true;
-      btnText.innerHTML = '<span class="spinner"></span> Browser Active & Waiting for Verification...';
-      log('Triggering browser on server to solve Cloudflare challenge...', 'info');
+      btnText.innerHTML = '<span class="spinner"></span> ' + browserChoice.toUpperCase() + ' Active & Waiting...';
+      log('Launching ' + browserChoice + ' browser on server to solve Cloudflare challenge...', 'info');
 
       try {
-        const res = await fetch('/api/portal/trigger-browser', { method: 'POST' });
+        const res = await fetch('/api/portal/trigger-browser', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ browser: browserChoice })
+        });
         const data = await res.json();
         if (data.success) {
           log(data.message, 'success');
